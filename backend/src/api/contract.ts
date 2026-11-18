@@ -447,8 +447,8 @@ export const API_CONTRACT: ContractEndpoint[] = [
     group: 'public',
     surfaces: BOTH,
     auth: 'none',
-    summary: 'Generate an export artifact. Returns an expiring download handle.',
-    responses: [201, 400, 403, 500, 503],
+    summary: 'Generate an export artifact. Returns an expiring download handle. Optional field selection and Idempotency-Key.',
+    responses: [201, 400, 403, 409, 500, 503],
   },
   {
     method: 'GET',

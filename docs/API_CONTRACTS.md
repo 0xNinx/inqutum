@@ -169,7 +169,7 @@ cursor. These semantics are pinned by
 | `GET` | `/api/notifications/preferences` | none | 200, 400 | Retrieve durable notification routing preferences for a recipient. |
 | `PUT` | `/api/notifications/preferences` | none | 200, 400 | Update durable notification routing preferences for a recipient. |
 | `GET` | `/api/notifications/routing-audit` | none | 200, 400 | Retrieve routing and override audit trail for a recipient. |
-| `POST` | `/api/exports` | none | 201, 400, 403, 500, 503 | Generate an export artifact. Returns an expiring download handle. |
+| `POST` | `/api/exports` | none | 201, 400, 403, 409, 500, 503 | Generate an export artifact. Returns an expiring download handle. Optional `fields` selection (field-level authorization, 403 `EXPORT_FIELD_FORBIDDEN`) and `Idempotency-Key` (409 on reuse for a different request). See [EXPORTS.md](EXPORTS.md). |
 | `GET` | `/api/exports/:id` | none | 200, 400, 404, 410 | Download an export artifact. 410 once it has expired. |
 | `GET` | `/api/stellar/account` | none | 200 | Account balances from Horizon. |
 | `GET` | `/api/stellar/payments` | none | 200 | Recent payments for an account from Horizon. |

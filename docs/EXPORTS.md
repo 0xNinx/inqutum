@@ -45,6 +45,60 @@ returns them.
 > what an invoice link already shows; bind `requester` to an authenticated
 > wallet session when one exists.
 
+## Field-level authorization (#308)
+
+Callers can ask for a subset of fields with `fields: [...]`. Every field the
+export knows about is classified in `EXPORT_FIELD_POLICY`, along with the grant
+needed to export it:
+
+| Classification | Fields | Requires |
+| --- | --- | --- |
+| identifier | `id`, `memo` | `owner` |
+| descriptive | `description` | `owner` |
+| financial | `amount`, `assetCode`, `assetIssuer` | `owner` |
+| settlement | `status`, `createdAt`, `expiresAt`, `paidAt`, `paymentTxHash` | `owner` |
+| counterparty | `payerPublicKey` | `counterparty`, which the public route **never** grants |
+| personal | `sellerName`, `sellerEmail`, `customerName`, `customerEmail`, `payerName`, `payerEmail` | nothing: **never exportable** |
+
+Rules:
+
+- **Default unchanged.** With no `fields`, the export has the same fields,
+  order and `schemaVersion: 1` as before.
+- **Selection is schema version 2.** Output contains only the selected fields,
+  in policy order (request order and duplicates are ignored). JSON metadata adds
+  `fieldClassifications`.
+- **All or nothing.** If any requested field is not allowed, the whole request
+  fails with `403 EXPORT_FIELD_FORBIDDEN`. The response lists every denied field
+  in `deniedFields` with its classification and reason (`missing_grant` or
+  `never_exportable`). Fields are never dropped silently.
+- **Fails closed.** Unknown names (including `__proto__`), an empty list or more
+  than 32 names get `400 INVALID_EXPORT_FIELDS`. A new invoice column cannot be
+  exported until someone classifies it.
+- **Checked before any work.** Field authorization runs before storage is read,
+  so a denied request reads nothing and stores nothing. The wallet-scope check
+  (`EXPORT_FORBIDDEN`) runs first.
+- The `PROOF_EXPORTED` audit event records the selected field names (never values).
+
+## Retries and idempotency (#308)
+
+Send `Idempotency-Key: <1-200 chars>` (or `idempotencyKey` in the body; the
+header wins).
+
+| Case | Result |
+| --- | --- |
+| Same key, same request (format, filters, field set), artifact still retained | Same artifact and `exportId`. Nothing new is generated. |
+| Concurrent requests with the same key | One generation is shared by all of them. |
+| Same key, different request | `409 EXPORT_IDEMPOTENCY_CONFLICT` |
+| Earlier attempt failed or was cancelled | The key is released. A retry generates normally. |
+| Earlier artifact expired or was evicted | A fresh artifact is generated under the same key. |
+
+Keys are scoped per wallet, so one wallet's key never resolves to another
+wallet's artifact. At most 1,000 keys are remembered (oldest dropped first),
+in memory, like the artifacts.
+
+**Rollback:** remove `fields` and `Idempotency-Key` from requests. The default
+path is unchanged. No migration is needed.
+
 ## Retention and limits
 
 | Setting | Default |
@@ -61,7 +115,8 @@ survive a restart; no migration or configuration is needed.
 ## API
 
 ```
-POST /api/exports   { "requester": "G…", "format": "json|csv", "status": "PAID", "from": ISO, "to": ISO }
+POST /api/exports   { "requester": "G…", "format": "json|csv", "status": "PAID", "from": ISO, "to": ISO, "fields": ["id", "amount"] }
+                    [Idempotency-Key: …]
   -> 201 { …metadata, downloadPath }
 GET  /api/exports/:id?requester=G…   -> file (Cache-Control: private, no-store)
 ```
