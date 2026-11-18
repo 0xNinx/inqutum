@@ -10,6 +10,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { createHash } from 'node:crypto';
 import { sanitizeForLogging } from '../observability/telemetry';
+import { eventLedger, type EventLedger } from './event-ledger';
 
 export type AuditAction =
   | 'INVOICE_CREATED'
@@ -101,13 +102,21 @@ export class MemoryAuditStore {
   private eventsByEntity: Map<string, string[]> = new Map(); // entityId -> eventIds
   private eventsByActor: Map<string, string[]> = new Map(); // actorId -> eventIds
   private eventsById: Map<string, AuditEvent> = new Map();
+  /** Hash of the newest evicted event, so the retained chain still verifies (#250). */
+  private evictedHash: string | null = null;
+  private readonly ledger: EventLedger | null;
 
-  constructor(maxCapacity = 5000) {
+  /**
+   * @param options.ledger privileged and financial events are mirrored into
+   *   this tamper-evident ledger (#250). Omit for a standalone store.
+   */
+  constructor(maxCapacity = 5000, options: { ledger?: EventLedger | null } = {}) {
     this.maxCapacity = maxCapacity;
+    this.ledger = options.ledger ?? null;
   }
 
   recordEvent(input: Omit<AuditEvent, 'id' | 'timestamp'> & { timestamp?: string }): AuditEvent {
-    const previousHash = this.events.at(-1)?.hash ?? null;
+    const previousHash = this.events.at(-1)?.hash ?? this.evictedHash;
     const eventWithoutHash: Omit<AuditEvent, 'hash'> = {
       id: uuidv4(),
       timestamp: input.timestamp || new Date().toISOString(),
@@ -135,6 +144,7 @@ export class MemoryAuditStore {
     if (this.events.length >= this.maxCapacity) {
       const oldest = this.events.shift();
       if (oldest) {
+        this.evictedHash = oldest.hash ?? null;
         this.eventsById.delete(oldest.id);
         const entityList = this.eventsByEntity.get(oldest.scope.entityId);
         if (entityList) {
@@ -163,6 +173,9 @@ export class MemoryAuditStore {
       this.eventsByActor.set(event.actor.id, []);
     }
     this.eventsByActor.get(event.actor.id)!.push(event.id);
+
+    // Never throws: a ledger that cannot accept the event defers it.
+    this.ledger?.mirrorAuditEvent(event);
 
     return event;
   }
@@ -220,6 +233,7 @@ export class MemoryAuditStore {
 
   clear(): void {
     this.events = [];
+    this.evictedHash = null;
     this.eventsById.clear();
     this.eventsByEntity.clear();
     this.eventsByActor.clear();
@@ -230,7 +244,7 @@ export class MemoryAuditStore {
   }
 
   verifyChain(): AuditChainVerification {
-    let previousHash: string | null = null;
+    let previousHash: string | null = this.evictedHash;
     for (let index = 0; index < this.events.length; index++) {
       const event = this.events[index];
       if ((event.previousHash ?? null) !== previousHash) {
@@ -246,7 +260,7 @@ export class MemoryAuditStore {
   }
 }
 
-export const auditStore = new MemoryAuditStore();
+export const auditStore = new MemoryAuditStore(5000, { ledger: eventLedger });
 
 /**
  * Format audit events for maintainer export in JSON, NDJSON, or CSV format.
