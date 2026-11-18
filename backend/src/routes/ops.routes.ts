@@ -69,6 +69,9 @@ import {
   type RepairPhase,
 } from '../ops/resumable-repair.service';
 import { pool } from '../config/database';
+import { EventLedger, eventLedger } from '../audit/event-ledger';
+import { FeatureRolloutController, featureRollout } from '../config/feature-rollout';
+import { registerGovernanceRoutes } from './governance.routes';
 
 export interface OpsRouterOptions {
   storage: InvoiceStorage;
@@ -101,6 +104,10 @@ export interface OpsRouterOptions {
   externalReferences?: ExternalReferenceVerificationService;
   /** Custom external reference probe for verification routes. */
   externalReferenceProbe?: ExternalReferenceProbe;
+  /** Tamper-evident event ledger (#250). Defaults to the process ledger. */
+  ledger?: EventLedger;
+  /** Feature rollout guardrails (#309). Defaults to the process controller. */
+  rollout?: FeatureRolloutController;
 }
 
 function defaultApprovals(): MaintainerApprovalService | null {
@@ -563,6 +570,14 @@ export function createOpsRouter(options: OpsRouterOptions): Router {
     } catch (err) {
       knownError(req, res, err, next);
     }
+  });
+
+  registerGovernanceRoutes(router, {
+    admin,
+    needCapabilities,
+    capabilities,
+    ledger: options.ledger ?? eventLedger,
+    rollout: options.rollout ?? featureRollout,
   });
 
   // Stale projection detection and repair recommendations (Issue #269)
