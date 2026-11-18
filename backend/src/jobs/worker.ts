@@ -59,6 +59,11 @@ export interface JobWorkerOptions {
   pollIntervalMs?: number;
   now?: () => Date;
   log?: (message: string, meta?: Record<string, unknown>) => void;
+  /**
+   * Job types for which this returns false are not claimed and stay queued
+   * without consuming an attempt (public-status pause/maintenance, #254).
+   */
+  gate?: (type: string) => boolean;
 }
 
 export class JobWorker {
@@ -69,6 +74,7 @@ export class JobWorker {
   private readonly pollIntervalMs: number;
   private readonly now: () => Date;
   private readonly log: (message: string, meta?: Record<string, unknown>) => void;
+  private readonly gate: (type: string) => boolean;
   private timer: NodeJS.Timeout | null = null;
   private ticking = false;
 
@@ -79,6 +85,7 @@ export class JobWorker {
     this.pollIntervalMs = options.pollIntervalMs ?? 1_000;
     this.now = options.now ?? (() => new Date());
     this.log = options.log ?? ((message, meta) => console.log(`[jobs] ${message}`, meta ?? ''));
+    this.gate = options.gate ?? (() => true);
   }
 
   register(type: string, handler: JobHandler): this {
@@ -88,7 +95,7 @@ export class JobWorker {
 
   /** Claims and runs at most one job. Returns the processed job, or null when idle. */
   async runOnce(): Promise<Job | null> {
-    const types = [...this.handlers.keys()];
+    const types = [...this.handlers.keys()].filter((type) => this.gate(type));
     if (types.length === 0) return null;
 
     const claimed = await this.store.claimNext(this.workerId, this.now(), this.leaseMs, types);

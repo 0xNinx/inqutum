@@ -69,6 +69,10 @@ import {
   type RepairPhase,
 } from '../ops/resumable-repair.service';
 import { pool } from '../config/database';
+import { PublicStatusError, PublicStatusService, publicStatusService } from '../ops/public-status';
+import { RolloutGuard, RolloutGuardError, rolloutGuard } from '../config/rollout-guard';
+import type { FeatureFlag } from '../config/feature-flags';
+import { ReconciliationError, ReconciliationService } from '../ops/reconciliation';
 
 export interface OpsRouterOptions {
   storage: InvoiceStorage;
@@ -101,6 +105,14 @@ export interface OpsRouterOptions {
   externalReferences?: ExternalReferenceVerificationService;
   /** Custom external reference probe for verification routes. */
   externalReferenceProbe?: ExternalReferenceProbe;
+  /** Dependency degradation state. Defaults to the process instance. */
+  degradedMode?: DegradedModeService;
+  /** Public status (#254). Defaults to the process instance. */
+  publicStatus?: PublicStatusService;
+  /** Feature-flag rollout guard (#256). Defaults to the process instance. */
+  rollouts?: RolloutGuard;
+  /** Projection reconciliation (#255). Defaults to one over `storage` and the live search index. */
+  reconciliation?: ReconciliationService;
 }
 
 function defaultApprovals(): MaintainerApprovalService | null {
@@ -164,6 +176,18 @@ export function createOpsRouter(options: OpsRouterOptions): Router {
       recentLogs: () => metrics.getRecentLogs(200),
     });
   const externalReferences = options.externalReferences ?? defaultExternalReferenceVerifier;
+  const degradedMode = options.degradedMode ?? degradedModeService;
+  const publicStatus = options.publicStatus ?? publicStatusService;
+  const rollouts = options.rollouts ?? rolloutGuard;
+  const reconciliation =
+    options.reconciliation ??
+    new ReconciliationService({
+      storage: options.storage,
+      index: defaultSearchIndex,
+      auditLookup: options.storage.getAuditEventsByInvoice
+        ? (id) => options.storage.getAuditEventsByInvoice!(id)
+        : undefined,
+    });
 
   if (approvals && options.jobs) {
     const jobs = options.jobs;
@@ -336,9 +360,177 @@ export function createOpsRouter(options: OpsRouterOptions): Router {
     err instanceof ApprovalError ||
     err instanceof CapabilityError ||
     err instanceof AdminConfigError ||
-    err instanceof PolicyDryRunError
+    err instanceof PolicyDryRunError ||
+    err instanceof PublicStatusError ||
+    err instanceof RolloutGuardError ||
+    err instanceof ReconciliationError
       ? fail(res, req, err.httpStatus, err.code, err.message)
       : next(err);
+
+  // -- Public status: degraded / paused / maintenance (#254) -----------------
+
+  router.get('/ops/public-status', admin, async (req, res, next) => {
+    try {
+      res.json({ success: true, data: await publicStatus.internalStatus(), correlationId: req.correlationId });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.put('/ops/public-status', admin, async (req, res, next) => {
+    try {
+      const declaration = publicStatus.declare({
+        state: req.body?.state,
+        reason: req.body?.reason,
+        expectedResolutionAt: req.body?.expectedResolutionAt,
+        expectedVersion: req.body?.expectedVersion,
+        actorId: 'ops-admin',
+        correlationId: req.correlationId,
+      });
+      res.json({ success: true, data: { declaration, version: publicStatus.getVersion() }, correlationId: req.correlationId });
+    } catch (err) {
+      knownError(req, res, err, next);
+    }
+  });
+
+  router.delete('/ops/public-status', admin, (req, res, next) => {
+    try {
+      const cleared = publicStatus.clear({
+        reason: req.body?.reason,
+        expectedVersion: req.body?.expectedVersion,
+        actorId: 'ops-admin',
+        correlationId: req.correlationId,
+      });
+      res.json({ success: true, data: { cleared, version: publicStatus.getVersion() }, correlationId: req.correlationId });
+    } catch (err) {
+      knownError(req, res, err, next);
+    }
+  });
+
+  // -- Feature-flag rollout guard (#256) --------------------------------------
+
+  router.get('/ops/rollouts', admin, (req, res) => {
+    res.json({ success: true, data: rollouts.list(), correlationId: req.correlationId });
+  });
+
+  router.post('/ops/rollouts/:flag', admin, (req, res, next) => {
+    try {
+      const record = rollouts.start({
+        flag: req.params.flag,
+        scope: req.body?.scope,
+        guardrail: req.body?.guardrail,
+        reason: req.body?.reason,
+        actorId: 'ops-admin',
+        correlationId: req.correlationId,
+      });
+      res.status(201).json({ success: true, data: record, correlationId: req.correlationId });
+    } catch (err) {
+      knownError(req, res, err, next);
+    }
+  });
+
+  // Outcome signals from monitors (synthetic journey, smoke checks) feed the guardrail.
+  router.post('/ops/rollouts/:flag/outcomes', admin, (req, res) => {
+    const ok = Number(req.body?.ok ?? 0);
+    const failed = Number(req.body?.failed ?? 0);
+    if (![ok, failed].every((n) => Number.isSafeInteger(n) && n >= 0 && n <= 1000) || ok + failed === 0) {
+      return fail(res, req, 400, 'INVALID_ROLLOUT', 'ok and failed must be non-negative integers (at most 1000 each) with at least one outcome');
+    }
+    if (!rollouts.get(req.params.flag as FeatureFlag)) {
+      return fail(res, req, 404, 'ROLLOUT_NOT_FOUND', `No rollout of "${req.params.flag}"`);
+    }
+    let record = null;
+    for (let i = 0; i < ok; i++) record = rollouts.recordOutcome(req.params.flag as FeatureFlag, true, req.correlationId);
+    for (let i = 0; i < failed; i++) record = rollouts.recordOutcome(req.params.flag as FeatureFlag, false, req.correlationId);
+    res.json({ success: true, data: record, correlationId: req.correlationId });
+  });
+
+  router.post('/ops/rollouts/:flag/rollback', admin, (req, res, next) => {
+    try {
+      const record = rollouts.rollback(req.params.flag, {
+        trigger: 'manual',
+        reason: req.body?.reason,
+        actorId: 'ops-admin',
+        correlationId: req.correlationId,
+      });
+      res.status(record.status === 'rolled_back' ? 200 : 500).json({
+        success: record.status === 'rolled_back',
+        data: record,
+        correlationId: req.correlationId,
+      });
+    } catch (err) {
+      knownError(req, res, err, next);
+    }
+  });
+
+  router.post('/ops/rollouts/:flag/verify', admin, (req, res) => {
+    const record = rollouts.get(req.params.flag as FeatureFlag);
+    if (!record) return fail(res, req, 404, 'ROLLOUT_NOT_FOUND', `No rollout of "${req.params.flag}"`);
+    const verification = rollouts.verifyRollback(record.flag, record.scope.allowList);
+    res.status(verification.consistent ? 200 : 409).json({ success: verification.consistent, data: verification, correlationId: req.correlationId });
+  });
+
+  router.post('/ops/rollouts/:flag/complete', admin, (req, res, next) => {
+    try {
+      res.json({ success: true, data: rollouts.complete(req.params.flag, 'ops-admin', req.correlationId), correlationId: req.correlationId });
+    } catch (err) {
+      knownError(req, res, err, next);
+    }
+  });
+
+  // -- Projection reconciliation, dry run first (#255) ------------------------
+
+  router.post('/ops/reconciliation/dry-run', admin, async (req, res, next) => {
+    try {
+      res.json({ success: true, data: await reconciliation.plan(), correlationId: req.correlationId });
+    } catch (err) {
+      knownError(req, res, err, next);
+    }
+  });
+
+  router.post('/ops/reconciliation/apply', admin, async (req, res, next) => {
+    const planId = req.body?.planId;
+    if (typeof planId !== 'string' || planId.length === 0) {
+      return fail(res, req, 400, 'PLAN_REQUIRED', 'planId from a dry run is required; repairs are never applied without one');
+    }
+    try {
+      const result = await reconciliation.apply(planId, 'ops-admin');
+      auditStore.recordEvent({
+        action: 'MAINTAINER_ACTION',
+        actor: { type: 'maintainer', id: 'ops-admin' },
+        scope: { entityType: 'system', entityId: 'search_index' },
+        reason: 'Projection reconciliation applied',
+        metadata: { runId: result.runId, planId, applied: result.applied.length, failed: result.failed.length, clean: result.verification.clean },
+        correlationId: req.correlationId,
+      });
+      res.status(result.verification.clean && result.failed.length === 0 ? 200 : 207).json({ success: true, data: result, correlationId: req.correlationId });
+    } catch (err) {
+      if (err instanceof ReconciliationError && err.code === 'PLAN_STALE') {
+        return res.status(409).json({
+          ...apiFailure(err.message, { code: err.code, correlationId: req.correlationId }),
+          data: err.plan,
+        });
+      }
+      knownError(req, res, err, next);
+    }
+  });
+
+  router.post('/ops/reconciliation/rollback', admin, (req, res, next) => {
+    try {
+      const result = reconciliation.rollback();
+      auditStore.recordEvent({
+        action: 'MAINTAINER_ACTION',
+        actor: { type: 'maintainer', id: 'ops-admin' },
+        scope: { entityType: 'system', entityId: 'search_index' },
+        reason: 'Projection reconciliation rolled back',
+        metadata: result,
+        correlationId: req.correlationId,
+      });
+      res.json({ success: true, data: result, correlationId: req.correlationId });
+    } catch (err) {
+      knownError(req, res, err, next);
+    }
+  });
 
   router.post('/ops/intents', admin, needApprovals, (req, res, next) => {
     try {
