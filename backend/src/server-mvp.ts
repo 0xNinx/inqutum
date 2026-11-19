@@ -14,6 +14,7 @@ import { createObservabilityRouter } from './routes/observability.routes';
 import memoryInvoiceStorage from './storage/memory-invoice-storage';
 import { configuredFrontendOrigins, corsOptions } from './config/runtime';
 import { healthHandler, readinessHandler, dependencyHealthHandler } from './health';
+import { publicStatusHandler, publicStatusService } from './ops/public-status';
 import { securityHeaders } from './security/content-safety';
 import { correlationMiddleware } from './observability/telemetry';
 import { buildUserSafeErrorResponse, classifyError } from './errors/error-taxonomy';
@@ -66,6 +67,7 @@ app.get('/', (req: Request, res: Response) => {
 app.get('/api/health', healthHandler(memoryInvoiceStorage.mode));
 app.get('/api/health/dependencies', dependencyHealthHandler());
 app.get('/api/ready', readinessHandler(memoryInvoiceStorage.mode));
+app.get('/api/status', publicStatusHandler(publicStatusService));
 
 // Invoice, Audit & Observability routes
 app.use('/api', createInvoiceRouter({ storage: memoryInvoiceStorage }));

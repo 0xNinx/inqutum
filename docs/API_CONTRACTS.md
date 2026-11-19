@@ -145,6 +145,7 @@ cursor. These semantics are pinned by
 | --- | --- | --- | --- | --- |
 | `GET` | `/` | none | 200 | Server banner: name, version and storage mode. |
 | `GET` | `/api/health` | none | 200 | Liveness plus the storage mode the server is running in. |
+| `GET` | `/api/status` | none | 200 | Public, secret-free service status (operational/degraded/paused/maintenance) and per-capability availability. |
 | `GET` | `/api/health/dependencies` | none | 200, 503 | Dependency-aware health status. Returns per-dependency state (healthy/degraded/down) and overall status. 503 when overall is down. |
 | `GET` | `/api/ready` | none | 200, 503 | Readiness probe. 503 when a dependency is unavailable. |
 | `POST` | `/api/invoices` | none | 201, 400 | Create an invoice. 201 returns the stored invoice. |
@@ -193,6 +194,18 @@ cursor. These semantics are pinned by
 | `POST` | `/api/ops/impersonation` | `admin` | 201, 400, 401, 403 | Open a support impersonation session. Fully audited. |
 | `POST` | `/api/ops/impersonation/end` | `admin` | 200, 401, 403, 404 | Close a support impersonation session. |
 | `POST` | `/api/ops/policy/simulate` | `admin` | 200, 400, 401, 403 | Simulate policy changes against current dataset before committing. |
+| `GET` | `/api/ops/public-status` | `admin` | 200, 401, 403 | Internal service status including the declaration reason and version. |
+| `PUT` | `/api/ops/public-status` | `admin` | 200, 400, 401, 403, 409, 503 | Declare degraded, paused or maintenance. Audited first; optimistic concurrency on expectedVersion. |
+| `DELETE` | `/api/ops/public-status` | `admin` | 200, 400, 401, 403, 409, 503 | Return to operational. Audited. |
+| `GET` | `/api/ops/rollouts` | `admin` | 200, 401, 403 | List feature-flag rollouts with window, status and rollback verification. |
+| `POST` | `/api/ops/rollouts/:flag` | `admin` | 201, 400, 401, 403, 404, 409, 503 | Start a scoped, guarded rollout of a flag. |
+| `POST` | `/api/ops/rollouts/:flag/outcomes` | `admin` | 200, 400, 401, 403, 404 | Report cohort outcomes; a guardrail breach rolls back automatically. |
+| `POST` | `/api/ops/rollouts/:flag/rollback` | `admin` | 200, 400, 401, 403, 404, 409, 500, 503 | Roll back a rollout and verify no subject is left on the new value. 500 when verification fails. |
+| `POST` | `/api/ops/rollouts/:flag/verify` | `admin` | 200, 401, 403, 404, 409 | Re-run rollback verification. 409 while inconsistent. |
+| `POST` | `/api/ops/rollouts/:flag/complete` | `admin` | 200, 401, 403, 404, 409, 503 | Mark a healthy rollout complete before promoting through the environment. |
+| `POST` | `/api/ops/reconciliation/dry-run` | `admin` | 200, 401, 403, 409, 501 | Read-only drift report between storage and the search index, with root-cause hints and a single-use plan id. |
+| `POST` | `/api/ops/reconciliation/apply` | `admin` | 200, 207, 400, 401, 403, 404, 409, 410 | Apply a reviewed reconciliation plan. 409 PLAN_STALE when drift changed since the dry run. |
+| `POST` | `/api/ops/reconciliation/rollback` | `admin` | 200, 401, 403, 409 | Restore the search index as it was before the last reconciliation apply. |
 | `GET` | `/api/ops/stale-projections/detect` | `admin` | 200, 401, 403 | Detect projection drift, stale statuses, and orphaned records. |
 | `POST` | `/api/ops/stale-projections/repair` | `admin` | 200, 401, 403 | Automate repair recommendations for detected projection drift. |
 | `POST` | `/api/ops/projections/search-index/replay` | `admin` | 200, 400, 401, 403, 409 | Rebuild the search index by replaying the audit trail through a versioned projector. Dry run by default. |

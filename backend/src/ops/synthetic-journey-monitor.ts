@@ -55,6 +55,18 @@ export interface SyntheticJourneyReport {
   rootCause?: string;
   remediation?: string;
   steps: JourneyStepResult[];
+  attempts?: number;
+  slaBreached?: boolean;
+}
+
+export interface SyntheticJourneyRetryOptions {
+  maxRetries?: number;
+  retryDelayMs?: number;
+  slaThresholdMs?: number;
+  injectedFailureStep?: JourneyStepName;
+  injectedFailureMessage?: string;
+  /** Number of initial attempts that should experience the injected failure (for testing recovery on retry). */
+  failAttempts?: number;
 }
 
 export interface SyntheticJourneyOptions {
@@ -74,12 +86,63 @@ export class SyntheticJourneyMonitor {
   private readonly sellerPublicKey: string;
   private readonly assetCode: string;
   private readonly amount: number;
+  private readonly history: SyntheticJourneyReport[] = [];
 
   constructor(options: SyntheticJourneyOptions = {}) {
     this.storage = options.storage || new MemoryInvoiceStorage();
     this.sellerPublicKey = options.sellerPublicKey || DEFAULT_SELLER;
     this.assetCode = options.assetCode || 'USDC';
     this.amount = options.amount || 25.5;
+  }
+
+  /**
+   * Returns recent synthetic journey reports (newest first).
+   */
+  getRecentRuns(limit = 20): SyntheticJourneyReport[] {
+    return this.history.slice(-Math.max(1, limit)).reverse();
+  }
+
+  /**
+   * Runs the synthetic journey with bounded retries and optional SLA threshold evaluation.
+   */
+  async runJourneyWithRetry(options: SyntheticJourneyRetryOptions = {}): Promise<SyntheticJourneyReport> {
+    const maxRetries = Math.max(0, options.maxRetries ?? 2);
+    const retryDelayMs = Math.max(0, options.retryDelayMs ?? 10);
+    const failAttempts = options.failAttempts ?? (options.injectedFailureStep ? maxRetries + 1 : 0);
+
+    let report!: SyntheticJourneyReport;
+    let attempts = 0;
+
+    for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
+      attempts = attempt;
+      const shouldInjectFailure = Boolean(options.injectedFailureStep && attempt <= failAttempts);
+      report = await this.runJourney(
+        shouldInjectFailure
+          ? {
+              injectedFailureStep: options.injectedFailureStep,
+              injectedFailureMessage: options.injectedFailureMessage,
+            }
+          : {}
+      );
+      if (report.success) break;
+      if (attempt <= maxRetries && retryDelayMs > 0) {
+        await new Promise((r) => setTimeout(r, retryDelayMs));
+      }
+    }
+
+    const slaBreached =
+      options.slaThresholdMs !== undefined ? report.totalLatencyMs > options.slaThresholdMs : undefined;
+    const enriched: SyntheticJourneyReport = {
+      ...report,
+      attempts,
+      ...(slaBreached !== undefined ? { slaBreached } : {}),
+    };
+
+    this.history.push(enriched);
+    if (this.history.length > 50) {
+      this.history.shift();
+    }
+    return enriched;
   }
 
   /**

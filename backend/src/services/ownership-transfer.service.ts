@@ -28,6 +28,17 @@ import {
   InvalidTargetOwnerError,
 } from '../domain/ownership-transfer';
 
+export interface OwnershipTransferAuditEntry {
+  id: string;
+  timestamp: string;
+  type: string;
+  transferId: string;
+  resourceType: string;
+  resourceId: string;
+  actorId: string;
+  details: Record<string, unknown>;
+}
+
 export interface OwnershipTransferAuditCallback {
   (event: {
     type: string;
@@ -44,6 +55,7 @@ export class OwnershipTransferService {
   private activePendingByResource = new Map<string, string>(); // resourceId -> transferId
   private tokenIndex = new Map<string, string>(); // transferToken -> transferId
   private resourceOwners = new Map<string, string>(); // resourceId -> currentOwnerId
+  private auditHistory: OwnershipTransferAuditEntry[] = [];
 
   constructor(
     private readonly auditCallback?: OwnershipTransferAuditCallback,
@@ -256,6 +268,71 @@ export class OwnershipTransferService {
   }
 
   /**
+   * Retries an expired, cancelled, or rejected ownership transfer by issuing a
+   * fresh transfer record and token while preserving audit linkage.
+   *
+   * Time Complexity: O(1)
+   */
+  public retryTransfer(
+    transferId: string,
+    actorId: string,
+    options: { ttlMs?: number; reason?: string } = {}
+  ): OwnershipTransferRecord {
+    const previous = this.getTransfer(transferId);
+    if (!previous) {
+      throw new OwnershipTransferNotFoundError(transferId);
+    }
+
+    const currentOwner = this.resourceOwners.get(previous.resourceId) ?? previous.currentOwnerId;
+    if (currentOwner !== actorId) {
+      throw new UnauthorizedTransferError(
+        `Actor '${actorId}' is not the current owner of ${previous.resourceType} '${previous.resourceId}'.`
+      );
+    }
+
+    if (previous.status === 'PENDING_ACCEPTANCE' || previous.status === 'ACCEPTED') {
+      throw new InvalidTransferStateError(previous.status);
+    }
+
+    const retried = this.initiateTransfer({
+      resourceType: previous.resourceType,
+      resourceId: previous.resourceId,
+      currentOwnerId: actorId,
+      targetOwnerId: previous.targetOwnerId,
+      targetOwnerEmail: previous.targetOwnerEmail,
+      reason: options.reason || `Retry of transfer ${previous.id}: ${previous.reason}`,
+      ttlMs: options.ttlMs,
+      previousOwnerRolePostTransfer: previous.previousOwnerRolePostTransfer,
+    });
+
+    retried.retryOfTransferId = previous.id;
+
+    this.emitAudit('OWNERSHIP_TRANSFER_RETRIED', retried, actorId, {
+      previousTransferId: previous.id,
+      previousStatus: previous.status,
+      expiresAt: retried.expiresAt.toISOString(),
+    });
+
+    return retried;
+  }
+
+  /**
+   * Queries the recorded ownership transfer audit history.
+   */
+  public getAuditHistory(filter?: {
+    resourceId?: string;
+    transferId?: string;
+    actorId?: string;
+  }): OwnershipTransferAuditEntry[] {
+    return this.auditHistory.filter((entry) => {
+      if (filter?.resourceId && entry.resourceId !== filter.resourceId) return false;
+      if (filter?.transferId && entry.transferId !== filter.transferId) return false;
+      if (filter?.actorId && entry.actorId !== filter.actorId) return false;
+      return true;
+    });
+  }
+
+  /**
    * Fetches an ownership transfer record by ID with lazy expiry resolution.
    *
    * Time Complexity: O(1)
@@ -267,6 +344,7 @@ export class OwnershipTransferService {
     if (transfer.status === 'PENDING_ACCEPTANCE' && Date.now() > transfer.expiresAt.getTime()) {
       transfer.status = 'EXPIRED';
       this.activePendingByResource.delete(transfer.resourceId);
+      this.emitAudit('OWNERSHIP_TRANSFER_EXPIRED', transfer, 'system', {});
     }
 
     return transfer;
@@ -311,6 +389,18 @@ export class OwnershipTransferService {
     actorId: string,
     details: Record<string, unknown>
   ): void {
+    const entry: OwnershipTransferAuditEntry = {
+      id: crypto.randomUUID(),
+      timestamp: new Date().toISOString(),
+      type,
+      transferId: record.id,
+      resourceType: record.resourceType,
+      resourceId: record.resourceId,
+      actorId,
+      details,
+    };
+    this.auditHistory.push(entry);
+
     if (this.auditCallback) {
       this.auditCallback({
         type,

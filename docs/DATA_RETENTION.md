@@ -7,6 +7,7 @@ enough for audits and support without accumulating indefinitely.
 - **Executor and job:** `backend/src/db/retention-sweep.ts`
 - **Job type:** `retention.sweep`
 - **Tests:** `backend/tests/data-retention.test.ts`
+- **Field-level metadata retention:** [METADATA_MINIMIZATION.md](METADATA_MINIMIZATION.md)
 
 ## The problem this solves
 
