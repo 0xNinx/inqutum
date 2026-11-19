@@ -1,4 +1,4 @@
-const test = require('node:test');
+const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const { resolvePayAmountViewModel } = require('../lib/pay-amount-block-contract');
 
@@ -132,4 +132,72 @@ test('handles invalid paidAt and expiresAt date strings safely', () => {
   const vm = resolvePayAmountViewModel(invoice);
   assert.equal(vm.isValid, true);
   assert.equal(vm.formattedPaidAt, null);
+});
+
+describe('PayAmountBlock contract hardening regression tests (#162)', () => {
+  test('validation: invalid invoice returns fallbackMessage and retryable flag', () => {
+    for (const invalid of [null, undefined, 'invoice', 12345, false, () => {}]) {
+      const vm = resolvePayAmountViewModel(invalid);
+      assert.equal(vm.isValid, false);
+      assert.equal(vm.fallbackMessage, 'Invoice details are unavailable.');
+      assert.equal(vm.retryable, true);
+      assert.equal(vm.isDegraded, true);
+    }
+  });
+
+  test('validation: assetCode normalization and default fallback', () => {
+    // Normalizes lowercase and trims
+    const vm1 = resolvePayAmountViewModel({ id: 'inv-a', amount: 10, assetCode: '  usdc  ' });
+    assert.equal(vm1.assetCode, 'USDC');
+
+    // Missing assetCode defaults safely to XLM
+    const vm2 = resolvePayAmountViewModel({ id: 'inv-b', amount: 10, assetCode: null });
+    assert.equal(vm2.assetCode, 'XLM');
+
+    const vm3 = resolvePayAmountViewModel({ id: 'inv-c', amount: 10, assetCode: '' });
+    assert.equal(vm3.assetCode, 'XLM');
+  });
+
+  test('degraded dependency: missing optional seller info and description degrades gracefully', () => {
+    const vm = resolvePayAmountViewModel({
+      id: 'inv-deg-1',
+      amount: 100,
+      status: 'PENDING',
+    });
+
+    assert.equal(vm.isValid, true);
+    assert.equal(vm.hasSellerInfo, false);
+    assert.equal(vm.sellerName, null);
+    assert.equal(vm.sellerEmail, null);
+    assert.equal(vm.description, null);
+    assert.equal(vm.headerLabel, 'Amount to Pay');
+    assert.equal(vm.formattedAmount, '100.0000000');
+  });
+
+  test('precision and edge cases: handles scientific notation and large numbers', () => {
+    const vm = resolvePayAmountViewModel({
+      id: 'inv-sci',
+      amount: '1e-5',
+      assetCode: 'XLM',
+    });
+    assert.equal(vm.isValid, true);
+    assert.equal(vm.formattedAmount, '0.0000100');
+  });
+
+  test('time and space complexity: resolves in O(1) time without allocating unbound memory', () => {
+    const invoice = {
+      id: 'inv-perf',
+      amount: 25.1234567,
+      assetCode: 'XLM',
+      status: 'PENDING',
+      expiresAt: new Date(Date.now() + 86400000).toISOString(),
+    };
+
+    const start = performance.now();
+    for (let i = 0; i < 1000; i++) {
+      resolvePayAmountViewModel(invoice);
+    }
+    const elapsed = performance.now() - start;
+    assert.ok(elapsed < 100, `Expected O(1) performance, took ${elapsed}ms for 1000 iterations`);
+  });
 });

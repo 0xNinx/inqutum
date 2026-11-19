@@ -129,7 +129,18 @@ export const CATALOG_GROUPS: ReadonlyArray<{ title: string; codes: readonly stri
   },
   {
     title: 'Inbound webhooks',
-    codes: ['MALFORMED_WEBHOOK', 'STALE_TIMESTAMP', 'INVALID_SIGNATURE', 'DUPLICATE_EVENT'],
+    codes: [
+      'MALFORMED_WEBHOOK',
+      'STALE_TIMESTAMP',
+      'INVALID_SIGNATURE',
+      'DUPLICATE_EVENT',
+      'WEBHOOK_EVENT_ID_INVALID',
+      'WEBHOOK_SIGNATURE_INVALID',
+      'WEBHOOK_DEDUPE_STORE_UNAVAILABLE',
+      'WEBHOOK_EVENT_IN_PROGRESS',
+      'WEBHOOK_EVENT_ID_CONFLICT',
+      'WEBHOOK_EVENT_ID_EXPIRED',
+    ],
   },
   {
     title: 'Capability tokens',

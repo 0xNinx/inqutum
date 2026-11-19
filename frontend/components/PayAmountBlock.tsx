@@ -1,18 +1,37 @@
+'use client';
+
 import AssetLogo from './AssetLogo';
 import PaymentStatus from './PaymentStatus';
 import type { PayPageInvoice } from './pay-page.types';
 import { resolvePayAmountViewModel } from '@/lib/pay-amount-block-contract';
+import { Boundary } from './Boundary';
+import { RefreshCw } from 'lucide-react';
 
-export default function PayAmountBlock({ invoice }: { invoice: PayPageInvoice }) {
+export interface PayAmountBlockProps {
+  invoice?: PayPageInvoice | null | undefined;
+  onRetry?: () => void;
+}
+
+export function PayAmountBlock({ invoice, onRetry }: PayAmountBlockProps) {
   const vm = resolvePayAmountViewModel(invoice);
 
   if (!vm.isValid) {
     return (
-      <section aria-labelledby="payment-details-title" className="card">
+      <section aria-labelledby="payment-details-title" className="card text-center" data-testid="pay-amount-block-invalid">
         <h2 id="payment-details-title" className="text-3xl font-bold text-gray-900 mb-8">
           Payment Details
         </h2>
-        <p className="text-gray-500 py-4 text-center">Invoice details are unavailable.</p>
+        <p className="text-gray-500 py-4 text-center">{vm.fallbackMessage || 'Invoice details are unavailable.'}</p>
+        {onRetry && (
+          <button
+            onClick={onRetry}
+            type="button"
+            className="btn btn-outline border-cyan-200 text-cyan-700 hover:bg-cyan-50 mx-auto mt-2 flex items-center justify-center gap-2"
+          >
+            <RefreshCw className="w-4 h-4" />
+            Try Again
+          </button>
+        )}
       </section>
     );
   }
@@ -67,5 +86,13 @@ export default function PayAmountBlock({ invoice }: { invoice: PayPageInvoice })
         )}
       </div>
     </section>
+  );
+}
+
+export default function BoundaryWrappedPayAmountBlock(props: PayAmountBlockProps) {
+  return (
+    <Boundary name="PayAmountBlock" fallbackMessage="Payment details unavailable" onRetry={props.onRetry}>
+      <PayAmountBlock {...props} />
+    </Boundary>
   );
 }
