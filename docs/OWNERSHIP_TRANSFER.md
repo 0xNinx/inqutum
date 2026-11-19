@@ -54,6 +54,19 @@ Instantaneous single-step ownership reassignment exposes accounts and organizati
 | **Nominee declines transfer** | Nominee calls `rejectTransfer(transferId)`. | State transitions to `REJECTED`. Owner is notified via audit trail, ownership remains unchanged. |
 | **Unauthorized actor attempts acceptance** | Attacker intercepts transfer ID and attempts `acceptTransfer()`. | Rejected with `UnauthorizedAcceptorError` (HTTP 403). Transfer remains pending for genuine nominee. |
 | **Database or network failure during acceptance** | Acceptance transaction fails mid-flight. | Handshake is atomic in-transaction; rolls back completely to `PENDING_ACCEPTANCE`. Nominee can safely retry acceptance. |
+| **Expired, cancelled, or rejected transfer needs re-issuance** | Prior transfer is in terminal `EXPIRED`, `CANCELLED`, or `REJECTED` state. | Current owner calls `retryTransfer(transferId, actorId)` (or `POST /api/ops/ownership-transfers/:id/retry`) to issue a fresh transfer with a new token and TTL linked via `retryOfTransferId`. |
+
+---
+
+## Audit History & Ops API
+- `OwnershipTransferService.getAuditHistory({ resourceId?, transferId?, actorId? })` returns chronological audit entries for `OWNERSHIP_TRANSFER_INITIATED`, `OWNERSHIP_TRANSFER_ACCEPTED`, `OWNERSHIP_TRANSFER_CANCELLED`, `OWNERSHIP_TRANSFER_REJECTED`, `OWNERSHIP_TRANSFER_EXPIRED`, and `OWNERSHIP_TRANSFER_RETRIED`.
+- Admin-authenticated HTTP endpoints under `/api/ops/ownership-transfers`:
+  - `POST /api/ops/ownership-transfers`
+  - `POST /api/ops/ownership-transfers/:id/accept`
+  - `POST /api/ops/ownership-transfers/:id/cancel`
+  - `POST /api/ops/ownership-transfers/:id/reject`
+  - `POST /api/ops/ownership-transfers/:id/retry`
+  - `GET /api/ops/ownership-transfers/:resourceId/history`
 
 ---
 

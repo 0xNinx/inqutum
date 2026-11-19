@@ -15,6 +15,10 @@
  */
 
 import type { StoredInvoice } from '../backend/src/storage/invoice-storage';
+import {
+  IncidentRecoveryRunner,
+  formatIncidentRecoveryReport,
+} from '../backend/src/ops/incident-recovery-checks';
 
 export interface UserImpactReport {
   generatedAt: string;
@@ -62,40 +66,61 @@ export function computeUserImpactReport(
 // CLI Execution handler
 if (require.main === module || (process.argv[1] && process.argv[1].includes('incident-drill'))) {
   const isJson = process.argv.includes('--json');
+  const isRecovery = process.argv.includes('--recovery');
+  const isCheck = process.argv.includes('--check');
 
-  // Sample fixture standing in for a real affected-invoice query during a drill.
-  const sample: StoredInvoice[] = [
-    {
-      id: 'drill-1',
-      sellerPublicKey: 'G' + 'A'.repeat(55),
-      amount: 10,
-      assetCode: 'XLM',
-      memo: 'DRILL-1',
-      status: 'EXPIRED',
-      createdAt: new Date('2026-01-01T00:00:00.000Z'),
-      expiresAt: new Date('2026-01-02T00:00:00.000Z'),
-    } as StoredInvoice,
-    {
-      id: 'drill-2',
-      sellerPublicKey: 'G' + 'B'.repeat(55),
-      amount: 20,
-      assetCode: 'XLM',
-      memo: 'DRILL-2',
-      status: 'PAID',
-      createdAt: new Date('2026-01-01T00:00:00.000Z'),
-      expiresAt: new Date('2026-01-02T00:00:00.000Z'),
-    } as StoredInvoice,
-  ];
-
-  const report = computeUserImpactReport(sample, new Date('2026-01-03T00:00:00.000Z'));
-
-  if (isJson) {
-    console.log(JSON.stringify(report, null, 2));
+  if (isRecovery) {
+    new IncidentRecoveryRunner()
+      .runChecks({ actorId: 'cli-operator', actorRole: 'ADMIN' })
+      .then((report) => {
+        if (isJson) {
+          console.log(JSON.stringify(report, null, 2));
+        } else {
+          console.log(formatIncidentRecoveryReport(report));
+        }
+        if (isCheck && !report.ok) {
+          process.exit(1);
+        }
+      })
+      .catch((err) => {
+        console.error('Incident recovery check error:', err);
+        process.exit(1);
+      });
   } else {
-    console.log('\n=== Incident Drill: User-Impact Report (sample fixture) ===');
-    console.log(`Invoices affected: ${report.invoicesAffected}`);
-    console.log(`Sellers affected: ${report.sellersAffected}`);
-    console.log(`Payments delayed/failed: ${report.paymentsDelayedOrFailed}`);
-    console.log(`Affected sellers (masked): ${report.affectedSellers.join(', ')}`);
+    // Sample fixture standing in for a real affected-invoice query during a drill.
+    const sample: StoredInvoice[] = [
+      {
+        id: 'drill-1',
+        sellerPublicKey: 'G' + 'A'.repeat(55),
+        amount: 10,
+        assetCode: 'XLM',
+        memo: 'DRILL-1',
+        status: 'EXPIRED',
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+        expiresAt: new Date('2026-01-02T00:00:00.000Z'),
+      } as StoredInvoice,
+      {
+        id: 'drill-2',
+        sellerPublicKey: 'G' + 'B'.repeat(55),
+        amount: 20,
+        assetCode: 'XLM',
+        memo: 'DRILL-2',
+        status: 'PAID',
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+        expiresAt: new Date('2026-01-02T00:00:00.000Z'),
+      } as StoredInvoice,
+    ];
+
+    const report = computeUserImpactReport(sample, new Date('2026-01-03T00:00:00.000Z'));
+
+    if (isJson) {
+      console.log(JSON.stringify(report, null, 2));
+    } else {
+      console.log('\n=== Incident Drill: User-Impact Report (sample fixture) ===');
+      console.log(`Invoices affected: ${report.invoicesAffected}`);
+      console.log(`Sellers affected: ${report.sellersAffected}`);
+      console.log(`Payments delayed/failed: ${report.paymentsDelayedOrFailed}`);
+      console.log(`Affected sellers (masked): ${report.affectedSellers.join(', ')}`);
+    }
   }
 }

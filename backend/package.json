@@ -25,6 +25,7 @@
     "db:validate": "tsx src/db/validate-restore.ts",
     "db:validate-snapshot": "tsx src/db/validate-snapshot-restore.ts",
     "journey:monitor": "tsx ../scripts/synthetic-journey-monitor.ts",
+    "recovery:check": "tsx ../scripts/incident-drill.ts --recovery --check",
     "db:import": "tsx src/imports/import-cli.ts",
     "db:seed": "tsx src/db/seed.ts",
     "diagnostics": "tsx ../scripts/diagnostics.ts",
