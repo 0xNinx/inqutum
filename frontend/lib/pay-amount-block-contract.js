@@ -3,21 +3,28 @@ const { hasInvoiceExpired } = require('./invoice-lifecycle');
 /**
  * Format amount with fixed decimals (7 decimals for Stellar precision).
  *
+ * Time Complexity:  O(1)
+ * Space Complexity: O(1)
+ *
  * @param {number | string} amount
  * @param {number} [decimals=7]
  * @returns {string}
  */
 function formatAmount(amount, decimals = 7) {
+  const safeDecimals = Math.max(0, Math.min(20, Math.floor(typeof decimals === 'number' && Number.isFinite(decimals) ? decimals : 7)));
   const num = typeof amount === 'string' ? parseFloat(amount) : amount;
-  if (!Number.isFinite(num) || num < 0) return (0).toFixed(decimals);
+  if (!Number.isFinite(num) || num < 0) return (0).toFixed(safeDecimals);
   return num.toLocaleString('en-US', {
-    minimumFractionDigits: decimals,
-    maximumFractionDigits: decimals,
+    minimumFractionDigits: safeDecimals,
+    maximumFractionDigits: safeDecimals,
   });
 }
 
 /**
  * Format date safely without throwing on invalid input.
+ *
+ * Time Complexity:  O(1)
+ * Space Complexity: O(1)
  *
  * @param {string | Date} date
  * @returns {string | null}
@@ -40,6 +47,9 @@ function formatDate(date) {
 
 /**
  * Calculate time remaining before invoice expires.
+ *
+ * Time Complexity:  O(1)
+ * Space Complexity: O(1)
  *
  * @param {string | Date} expiresAt
  * @param {Date | string | number} [now]
@@ -67,7 +77,10 @@ function getTimeRemaining(expiresAt, now = Date.now()) {
 }
 
 /**
- * Resolves the view model and state for the PayAmountBlock component.
+ * Resolves the view model and state for the PayAmountBlock component (Issue #162).
+ *
+ * Time Complexity:  O(1)
+ * Space Complexity: O(1)
  *
  * @param {any} invoice
  * @param {Date | string | number} [now]
@@ -86,6 +99,9 @@ function getTimeRemaining(expiresAt, now = Date.now()) {
  *   paymentTxHash: string | null;
  *   expiryRemaining: string | null;
  *   formattedPaidAt: string | null;
+ *   fallbackMessage?: string;
+ *   retryable?: boolean;
+ *   isDegraded?: boolean;
  * }}
  */
 function resolvePayAmountViewModel(invoice, now = Date.now()) {
@@ -105,6 +121,9 @@ function resolvePayAmountViewModel(invoice, now = Date.now()) {
       paymentTxHash: null,
       expiryRemaining: null,
       formattedPaidAt: null,
+      fallbackMessage: 'Invoice details are unavailable.',
+      retryable: true,
+      isDegraded: true,
     };
   }
 
