@@ -13,8 +13,14 @@ export interface PayAmountViewModel {
   paymentTxHash: string | null;
   expiryRemaining: string | null;
   formattedPaidAt: string | null;
+  fallbackMessage?: string;
+  retryable?: boolean;
+  isDegraded?: boolean;
 }
 
+export function formatAmount(amount: number | string, decimals?: number): string;
+export function formatDate(date: string | Date): string | null;
+export function getTimeRemaining(expiresAt: string | Date, now?: Date | string | number): string | null;
 export function resolvePayAmountViewModel(
   invoice: any,
   now?: Date | string | number
