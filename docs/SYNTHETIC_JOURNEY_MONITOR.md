@@ -81,3 +81,9 @@ Response:
 ### 3. Data Isolation Guarantee
 - Synthetic journeys use distinct `SYNTH-` memo prefixes and isolate entities.
 - Production analytics and financial totals filter synthetic records to prevent accounting pollution.
+
+### 4. Retries, SLA Thresholds & Run History (#391)
+- `SyntheticJourneyMonitor.runJourneyWithRetry({ maxRetries, retryDelayMs, slaThresholdMs })` retries transient failures and flags `slaBreached: true` if `totalLatencyMs > slaThresholdMs`.
+- `POST /api/ops/synthetic-journey/run` accepts optional `{ retries, slaThresholdMs }` and requires `Authorization: Bearer <JOBS_ADMIN_TOKEN>` (`401`/`403` otherwise).
+- `GET /api/ops/synthetic-journey/history` returns recent bounded run reports (admin-authenticated).
+- **Recovery / Rollback**: Failed synthetic runs automatically clean up synthetic invoices in `finally` so no orphan test records remain.

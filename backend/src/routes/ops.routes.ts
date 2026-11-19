@@ -38,6 +38,17 @@ import { AdminConfigError, AdminConfigService, adminConfig } from '../config/adm
 import { staleProjectionService } from '../ops/stale-projections.service';
 import { defaultSearchIndex } from '../services/search-index.service';
 import { SyntheticJourneyMonitor } from '../ops/synthetic-journey-monitor';
+import {
+  EventSchemaDriftDetector,
+  EventSchemaDriftError,
+  defaultEventSchemaDriftDetector,
+} from '../schema/event-schema-drift';
+import { OwnershipTransferService } from '../services/ownership-transfer.service';
+import { OwnershipTransferError } from '../domain/ownership-transfer';
+import {
+  IncidentRecoveryRunner,
+  UnauthorizedRecoveryCheckError,
+} from '../ops/incident-recovery-checks';
 import { verifySnapshotRestore } from '../db/snapshot-restore-verification';
 import {
   DEPENDENCY_MATRIX,
@@ -101,6 +112,14 @@ export interface OpsRouterOptions {
   externalReferences?: ExternalReferenceVerificationService;
   /** Custom external reference probe for verification routes. */
   externalReferenceProbe?: ExternalReferenceProbe;
+  /** Event schema drift detector (#389). */
+  eventSchemaDrift?: EventSchemaDriftDetector;
+  /** Ownership transfer service (#390). */
+  ownershipTransfers?: OwnershipTransferService;
+  /** Synthetic journey monitor (#391). */
+  syntheticMonitor?: SyntheticJourneyMonitor;
+  /** Incident recovery runner (#392). */
+  recoveryRunner?: IncidentRecoveryRunner;
 }
 
 function defaultApprovals(): MaintainerApprovalService | null {
@@ -164,6 +183,21 @@ export function createOpsRouter(options: OpsRouterOptions): Router {
       recentLogs: () => metrics.getRecentLogs(200),
     });
   const externalReferences = options.externalReferences ?? defaultExternalReferenceVerifier;
+  const eventSchemaDrift = options.eventSchemaDrift ?? defaultEventSchemaDriftDetector;
+  const ownershipTransfers =
+    options.ownershipTransfers ??
+    new OwnershipTransferService((evt) => {
+      auditStore.recordEvent({
+        action: 'MAINTAINER_ACTION',
+        actor: { type: 'maintainer', id: evt.actorId },
+        scope: { entityType: 'system', entityId: evt.resourceId },
+        reason: `${evt.type} (${evt.transferId})`,
+        metadata: evt.details,
+      });
+    });
+  const syntheticMonitor = options.syntheticMonitor ?? new SyntheticJourneyMonitor({ storage: options.storage });
+  const recoveryRunner =
+    options.recoveryRunner ?? new IncidentRecoveryRunner({ storage: options.storage, jobs: options.jobs });
 
   if (approvals && options.jobs) {
     const jobs = options.jobs;
@@ -639,15 +673,25 @@ export function createOpsRouter(options: OpsRouterOptions): Router {
     }
   });
 
-  // Synthetic journey monitor for critical workflow (Issue #264)
+  // Synthetic journey monitor for critical workflow (Issue #264 / #391)
   router.post('/ops/synthetic-journey/run', admin, async (req, res, next) => {
     try {
-      const monitor = new SyntheticJourneyMonitor({ storage: options.storage });
-      const report = await monitor.runJourney();
+      const retries = typeof req.body?.retries === 'number' ? Math.max(0, req.body.retries) : 0;
+      const slaThresholdMs =
+        typeof req.body?.slaThresholdMs === 'number' ? req.body.slaThresholdMs : undefined;
+      const report = await syntheticMonitor.runJourneyWithRetry({
+        maxRetries: retries,
+        slaThresholdMs,
+      });
       res.status(report.success ? 200 : 503).json({ success: report.success, data: report, correlationId: req.correlationId });
     } catch (err) {
       next(err);
     }
+  });
+
+  router.get('/ops/synthetic-journey/history', admin, (req, res) => {
+    const limit = typeof req.query.limit === 'string' ? Number(req.query.limit) || 20 : 20;
+    res.json({ success: true, data: syntheticMonitor.getRecentRuns(limit), correlationId: req.correlationId });
   });
 
   // Snapshot restore verification for critical data and derived indexes (Issue #263)
@@ -967,6 +1011,145 @@ export function createOpsRouter(options: OpsRouterOptions): Router {
       data: explanation,
       correlationId: req.correlationId,
     });
+  });
+
+  // -- Cross-service event schema drift detection (#389) --------------------
+
+  router.get('/ops/event-schemas/contracts', admin, (_req, res) => {
+    res.json({ success: true, data: eventSchemaDrift.listContracts(), correlationId: _req.correlationId });
+  });
+
+  router.post('/ops/event-schemas/drift-check', admin, (req, res) => {
+    try {
+      const report = eventSchemaDrift.detectDrift(req.body);
+      const status = report.breakingCount > 0 ? 409 : 200;
+      return res.status(status).json({
+        success: report.breakingCount === 0,
+        data: report,
+        correlationId: req.correlationId,
+      });
+    } catch (err) {
+      if (err instanceof EventSchemaDriftError) {
+        return fail(res, req, err.httpStatus, err.code, err.message);
+      }
+      throw err;
+    }
+  });
+
+  router.post('/ops/event-schemas/rollback', admin, (req, res) => {
+    try {
+      const { eventType, targetVersion, actorId } = req.body ?? {};
+      const contract = eventSchemaDrift.rollbackContract(eventType, targetVersion, {
+        actorId: typeof actorId === 'string' ? actorId : 'admin',
+        role: 'ADMIN',
+      });
+      return res.json({ success: true, data: contract, correlationId: req.correlationId });
+    } catch (err) {
+      if (err instanceof EventSchemaDriftError) {
+        return fail(res, req, err.httpStatus, err.code, err.message);
+      }
+      throw err;
+    }
+  });
+
+  // -- Ownership transfer with expiry and audit history (#390) --------------
+
+  router.post('/ops/ownership-transfers', admin, (req, res) => {
+    try {
+      const record = ownershipTransfers.initiateTransfer(req.body);
+      return res.status(201).json({ success: true, data: record, correlationId: req.correlationId });
+    } catch (err) {
+      if (err instanceof OwnershipTransferError) {
+        return fail(res, req, err.httpStatus, err.code, err.message);
+      }
+      throw err;
+    }
+  });
+
+  router.post('/ops/ownership-transfers/:id/accept', admin, (req, res) => {
+    try {
+      const record = ownershipTransfers.acceptTransfer(req.params.id, req.body?.acceptorId);
+      return res.json({ success: true, data: record, correlationId: req.correlationId });
+    } catch (err) {
+      if (err instanceof OwnershipTransferError) {
+        return fail(res, req, err.httpStatus, err.code, err.message);
+      }
+      throw err;
+    }
+  });
+
+  router.post('/ops/ownership-transfers/:id/cancel', admin, (req, res) => {
+    try {
+      const record = ownershipTransfers.cancelTransfer(req.params.id, req.body?.actorId, req.body?.reason);
+      return res.json({ success: true, data: record, correlationId: req.correlationId });
+    } catch (err) {
+      if (err instanceof OwnershipTransferError) {
+        return fail(res, req, err.httpStatus, err.code, err.message);
+      }
+      throw err;
+    }
+  });
+
+  router.post('/ops/ownership-transfers/:id/reject', admin, (req, res) => {
+    try {
+      const record = ownershipTransfers.rejectTransfer(req.params.id, req.body?.actorId, req.body?.reason);
+      return res.json({ success: true, data: record, correlationId: req.correlationId });
+    } catch (err) {
+      if (err instanceof OwnershipTransferError) {
+        return fail(res, req, err.httpStatus, err.code, err.message);
+      }
+      throw err;
+    }
+  });
+
+  router.post('/ops/ownership-transfers/:id/retry', admin, (req, res) => {
+    try {
+      const record = ownershipTransfers.retryTransfer(req.params.id, req.body?.actorId, {
+        ttlMs: req.body?.ttlMs,
+        reason: req.body?.reason,
+      });
+      return res.status(201).json({ success: true, data: record, correlationId: req.correlationId });
+    } catch (err) {
+      if (err instanceof OwnershipTransferError) {
+        return fail(res, req, err.httpStatus, err.code, err.message);
+      }
+      throw err;
+    }
+  });
+
+  router.get('/ops/ownership-transfers/:resourceId/history', admin, (req, res) => {
+    const resourceId = req.params.resourceId;
+    return res.json({
+      success: true,
+      data: {
+        transfers: ownershipTransfers.listTransfers(resourceId),
+        auditHistory: ownershipTransfers.getAuditHistory({ resourceId }),
+      },
+      correlationId: req.correlationId,
+    });
+  });
+
+  // -- Executable incident recovery checks (#392) ---------------------------
+
+  router.post('/ops/incident-recovery/verify', admin, async (req, res, next) => {
+    try {
+      const report = await recoveryRunner.runChecks({
+        actorId: typeof req.body?.actorId === 'string' ? req.body.actorId : 'admin',
+        actorRole: 'ADMIN',
+        checkIds: Array.isArray(req.body?.checkIds) ? req.body.checkIds : undefined,
+        maxRetries: typeof req.body?.maxRetries === 'number' ? req.body.maxRetries : undefined,
+      });
+      return res.status(report.ok ? 200 : 503).json({
+        success: report.ok,
+        data: report,
+        correlationId: req.correlationId,
+      });
+    } catch (err) {
+      if (err instanceof UnauthorizedRecoveryCheckError) {
+        return fail(res, req, err.httpStatus, err.code, err.message);
+      }
+      next(err);
+    }
   });
 
   return router;
