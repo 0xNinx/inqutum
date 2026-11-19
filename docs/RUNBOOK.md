@@ -596,3 +596,27 @@ curl -s "https://horizon-testnet.stellar.org/transactions/<TX_HASH>" | jq .
   externally without review.
 - **Invoice exports** never include seller, customer, or payer names or emails
   (see [EXPORTS.md](./EXPORTS.md)).
+
+---
+
+## Executable recovery checks (#392)
+
+Run automated post-incident verification checks against storage, job queues,
+dependencies, and the synthetic end-to-end journey:
+
+```bash
+# CLI (exits 1 if any recovery check fails)
+cd backend && npm run recovery:check
+
+# Machine-readable JSON output
+npx tsx scripts/incident-drill.ts --recovery --json
+
+# Admin-authenticated HTTP endpoint
+curl -s -X POST -H "Authorization: Bearer $JOBS_ADMIN_TOKEN" \
+  "$API/api/ops/incident-recovery/verify" | jq .
+```
+
+### Edge cases, retries & authorization
+- **Transient probe blips**: `IncidentRecoveryRunner.runChecks()` retries each check up to `maxRetries` (default `2`) with exponential backoff before marking `FAIL`.
+- **Authorization**: Programmatic execution requires `OWNER` or `ADMIN` role (`UnauthorizedRecoveryCheckError`, HTTP `403`); HTTP route requires `JOBS_ADMIN_TOKEN`.
+- **Rollback / Escalation**: When a check fails, `remediationCommands` lists the exact runbook command for the failing subsystem (`db:migrate`, dead-job inspection, `/api/health/dependencies`, or `journey:monitor`).

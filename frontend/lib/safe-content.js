@@ -93,7 +93,12 @@ const MAILTO_ADDRESS = /^[A-Za-z0-9._+\-]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*\.
  */
 function buildMailtoUrl(address, subject, body) {
   if (typeof address !== 'string' || !MAILTO_ADDRESS.test(address.trim())) return null;
-  return `mailto:${address.trim()}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  // Subject/body are declared as strings; defend against odd runtime inputs so a
+  // nullish or numeric value can never leak "undefined"/"NaN" into the link and
+  // misrepresent invoice/payment-proof state (issue #153).
+  const subj = typeof subject === 'string' ? subject : '';
+  const bod = typeof body === 'string' ? body : '';
+  return `mailto:${address.trim()}?subject=${encodeURIComponent(subj)}&body=${encodeURIComponent(bod)}`;
 }
 
 /**
