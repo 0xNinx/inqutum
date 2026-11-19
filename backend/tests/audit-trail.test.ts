@@ -193,6 +193,26 @@ describe('Audit-Grade Event Trail (Issue #46)', () => {
       assert.equal(query.events[0].scope.entityId, 'inv-10');
       assert.equal(query.events[4].scope.entityId, 'inv-6');
     });
+
+    it('still verifies the hash chain after the ring buffer evicts its head (#251)', () => {
+      const smallStore = new MemoryAuditStore(5);
+      for (let i = 1; i <= 10; i++) {
+        smallStore.recordEvent({
+          action: 'INVOICE_CREATED',
+          actor: { type: 'seller', id: 's1' },
+          scope: { entityType: 'invoice', entityId: `inv-${i}` },
+        });
+      }
+      assert.deepEqual(smallStore.verifyChain(), { valid: true, checked: 5 });
+
+      smallStore.clear();
+      smallStore.recordEvent({
+        action: 'INVOICE_CREATED',
+        actor: { type: 'seller', id: 's1' },
+        scope: { entityType: 'invoice', entityId: 'inv-after-clear' },
+      });
+      assert.deepEqual(smallStore.verifyChain(), { valid: true, checked: 1 });
+    });
   });
 
   describe('Maintainer Export Formats', () => {

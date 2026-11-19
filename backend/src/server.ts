@@ -12,7 +12,9 @@ import { correlationMiddleware } from './observability/telemetry';
 import invoiceService from './services/invoice.service';
 import { JobQueue, JobWorker } from './jobs/worker';
 import { PostgresJobStore } from './jobs/postgres-job-store';
-import { registerJobHandlers, startExpiryScheduler } from './jobs/runtime';
+import { registerJobHandlers, scheduleReconciliation, startExpiryScheduler } from './jobs/runtime';
+import { ReconciliationService } from './ops/reconciliation';
+import { publicStatusService } from './ops/public-status';
 import { buildUserSafeErrorResponse, classifyError } from './errors/error-taxonomy';
 import { validateEnvironment } from './config/env-validator';
 import { strictInputLimitsMiddleware } from './security/input-limits';
@@ -30,10 +32,17 @@ const PORT = envCheck.validated.PORT || process.env.PORT || 3001;
 // Background jobs: the expiry sweep runs through the worker framework. Set
 // JOBS_EMBEDDED_WORKER=false to run workers only via `npm run worker`.
 const jobStore = new PostgresJobStore(pool);
-const jobWorker = registerJobHandlers(new JobWorker({ store: jobStore }), {
+const jobWorker = registerJobHandlers(new JobWorker({ store: jobStore, gate: (type) => publicStatusService.backgroundGate(type).run }), {
   expirePendingInvoices: () => invoiceService.markExpiredInvoices(),
+  // Detect-only: the job reports drift, repair stays a reviewed /ops/reconciliation apply.
+  reconcileProjections: () =>
+    new ReconciliationService({
+      storage: postgresInvoiceStorage,
+      auditLookup: (id) => postgresInvoiceStorage.getAuditEventsByInvoice(id),
+    }).scheduledCheck(),
 });
 let stopExpiryScheduler: (() => void) | null = null;
+let stopReconciliationScheduler: (() => void) | null = null;
 
 // Correlation ID & Latency Tracking
 app.use(correlationMiddleware());
@@ -99,6 +108,16 @@ async function initialize() {
     if (process.env.JOBS_EMBEDDED_WORKER !== 'false') {
       jobWorker.start();
       stopExpiryScheduler = startExpiryScheduler(new JobQueue(jobStore));
+      // Opt-in: set RECONCILIATION_INTERVAL_MS (e.g. 900000) to schedule detect-only runs.
+      const reconcileEvery = Number(process.env.RECONCILIATION_INTERVAL_MS);
+      if (Number.isFinite(reconcileEvery) && reconcileEvery > 0) {
+        const queue = new JobQueue(jobStore);
+        const tick = () => scheduleReconciliation(queue, new Date(), reconcileEvery).catch((err) => console.error('[jobs] failed to schedule reconciliation:', err));
+        void tick();
+        const timer = setInterval(tick, reconcileEvery);
+        timer.unref?.();
+        stopReconciliationScheduler = () => clearInterval(timer);
+      }
     }
   } catch (error) {
     console.error('Failed to initialize:', error);
@@ -131,6 +150,7 @@ process.on('SIGTERM', async () => {
   paymentMonitorService.stop();
   jobWorker.stop();
   stopExpiryScheduler?.();
+  stopReconciliationScheduler?.();
   await pool.end();
   process.exit(0);
 });
@@ -140,6 +160,7 @@ process.on('SIGINT', async () => {
   paymentMonitorService.stop();
   jobWorker.stop();
   stopExpiryScheduler?.();
+  stopReconciliationScheduler?.();
   await pool.end();
   process.exit(0);
 });
