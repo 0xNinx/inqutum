@@ -26,7 +26,12 @@ export type AuditAction =
   | 'IMPERSONATION_ACTION_ALLOWED'
   | 'IMPERSONATION_ACTION_BLOCKED'
   | 'CAPABILITY_ISSUED'
-  | 'CONFIG_CHANGED';
+  | 'CONFIG_CHANGED'
+  | 'DUPLICATE_MERGE_PROPOSED'
+  | 'DUPLICATE_MERGE_APPROVED'
+  | 'DUPLICATE_MERGE_REJECTED'
+  | 'DUPLICATE_MERGE_REVERTED'
+  | 'DUPLICATE_MERGE_FINALIZED';
 
 export type AuditActorType = 'seller' | 'payer' | 'system' | 'maintainer';
 
@@ -101,6 +106,9 @@ export class MemoryAuditStore {
   private eventsByEntity: Map<string, string[]> = new Map(); // entityId -> eventIds
   private eventsByActor: Map<string, string[]> = new Map(); // actorId -> eventIds
   private eventsById: Map<string, AuditEvent> = new Map();
+  // Hash of the most recently evicted event: the retained chain links to it,
+  // so verification must start from it rather than from null.
+  private evictedHeadHash: string | null = null;
 
   constructor(maxCapacity = 5000) {
     this.maxCapacity = maxCapacity;
@@ -135,6 +143,7 @@ export class MemoryAuditStore {
     if (this.events.length >= this.maxCapacity) {
       const oldest = this.events.shift();
       if (oldest) {
+        this.evictedHeadHash = oldest.hash ?? null;
         this.eventsById.delete(oldest.id);
         const entityList = this.eventsByEntity.get(oldest.scope.entityId);
         if (entityList) {
@@ -223,6 +232,7 @@ export class MemoryAuditStore {
     this.eventsById.clear();
     this.eventsByEntity.clear();
     this.eventsByActor.clear();
+    this.evictedHeadHash = null;
   }
 
   size(): number {
@@ -230,7 +240,7 @@ export class MemoryAuditStore {
   }
 
   verifyChain(): AuditChainVerification {
-    let previousHash: string | null = null;
+    let previousHash: string | null = this.evictedHeadHash;
     for (let index = 0; index < this.events.length; index++) {
       const event = this.events[index];
       if ((event.previousHash ?? null) !== previousHash) {

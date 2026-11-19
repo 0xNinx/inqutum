@@ -251,4 +251,44 @@ describe('Safe Ownership Transfer (#300)', () => {
       }
     );
   });
+
+  it('retry path & audit history: owner can retry expired/cancelled transfer and query audit history', async () => {
+    const expired = service.initiateTransfer({
+      resourceType: 'ORGANIZATION',
+      resourceId: ORG_ID,
+      currentOwnerId: OWNER_ALICE,
+      targetOwnerId: NOMINEE_BOB,
+      reason: 'Initial attempt',
+      ttlMs: 10,
+    });
+
+    await new Promise((r) => setTimeout(r, 20));
+
+    // Non-owner cannot retry
+    assert.throws(
+      () => service.retryTransfer(expired.id, ATTACKER_EVE),
+      (err: any) => err instanceof UnauthorizedTransferError
+    );
+
+    // Owner retries expired transfer
+    const retried = service.retryTransfer(expired.id, OWNER_ALICE, { ttlMs: 60_000 });
+    assert.strictEqual(retried.status, 'PENDING_ACCEPTANCE');
+    assert.strictEqual(retried.retryOfTransferId, expired.id);
+    assert.notStrictEqual(retried.id, expired.id);
+
+    // Cannot retry while still PENDING_ACCEPTANCE
+    assert.throws(
+      () => service.retryTransfer(retried.id, OWNER_ALICE),
+      (err: any) => err instanceof InvalidTransferStateError
+    );
+
+    // Accept and verify audit history
+    service.acceptTransfer(retried.id, NOMINEE_BOB);
+    const history = service.getAuditHistory({ resourceId: ORG_ID });
+    const types = history.map((h) => h.type);
+    assert.ok(types.includes('OWNERSHIP_TRANSFER_INITIATED'));
+    assert.ok(types.includes('OWNERSHIP_TRANSFER_EXPIRED'));
+    assert.ok(types.includes('OWNERSHIP_TRANSFER_RETRIED'));
+    assert.ok(types.includes('OWNERSHIP_TRANSFER_ACCEPTED'));
+  });
 });
