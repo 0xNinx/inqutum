@@ -6,11 +6,12 @@ import invoiceService from './services/invoice.service';
 import { JobQueue, JobWorker } from './jobs/worker';
 import { PostgresJobStore } from './jobs/postgres-job-store';
 import { registerJobHandlers, startExpiryScheduler } from './jobs/runtime';
+import { publicStatusService } from './ops/public-status';
 
 dotenv.config();
 
 const store = new PostgresJobStore(pool);
-const worker = registerJobHandlers(new JobWorker({ store }), {
+const worker = registerJobHandlers(new JobWorker({ store, gate: (type) => publicStatusService.backgroundGate(type).run }), {
   expirePendingInvoices: () => invoiceService.markExpiredInvoices(),
 });
 const stopScheduler = startExpiryScheduler(new JobQueue(store));

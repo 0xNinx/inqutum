@@ -16,6 +16,7 @@ import { pool } from '../config/database';
 import { EmailDeliveryService } from '../notifications/email-delivery';
 import { PostgresCheckpointStore } from '../recovery/side-effect-checkpoint';
 import { healthHandler, readinessHandler, dependencyHealthHandler } from '../health';
+import { publicStatusHandler, publicStatusService } from '../ops/public-status';
 
 const router: Router = Router();
 
@@ -23,6 +24,8 @@ const router: Router = Router();
 router.get('/health', healthHandler(postgresInvoiceStorage.mode));
 router.get('/health/dependencies', dependencyHealthHandler());
 router.get('/ready', readinessHandler(postgresInvoiceStorage.mode));
+// Public, secret-free service status for the UI banner (#254)
+router.get('/status', publicStatusHandler(publicStatusService));
 
 // Invoice routes — same handlers the MVP server uses, backed by PostgreSQL
 router.use(createInvoiceRouter({ storage: postgresInvoiceStorage }));
