@@ -54,6 +54,14 @@ number is the idempotency key, so multiple instances never duplicate a sweep.
 The sweep itself (`markExpiredInvoices`) is idempotent. It now runs even when
 `SELLER_PUBLIC_KEY` is unset (previously only with the payment monitor).
 
+## Optional job: stale authorization cleanup
+
+`authorizations.cleanup-stale` is registered when `cleanupStaleAuthorizations`
+is passed to `registerJobHandlers`. It marks expired authorizations that are
+past their grace period as `cleaned` and audits each one. Payload
+`{ dryRun?: boolean, graceMs?: number }`. It applies the cleanup unless
+`dryRun` is `true`. See [AUTHORIZATION_LIFECYCLE.md](./AUTHORIZATION_LIFECYCLE.md).
+
 ## Running workers locally
 
 Requires PostgreSQL with the schema applied (`npm run db:migrate` creates the
