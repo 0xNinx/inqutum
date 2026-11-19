@@ -47,6 +47,25 @@ interface WalletState {
   clearError: () => void;
 }
 
+/**
+ * Rehydrate persisted wallet state, recovering safely when storage is corrupt
+ * or fields are missing/wrong-typed (degraded-dependency recovery). Only known,
+ * well-typed fields are carried over; everything else falls back to the current
+ * defaults. Exported so the recovery contract is regression-tested (issue #155).
+ */
+export function rehydrateWalletState(
+  persisted: unknown,
+  current: WalletState
+): WalletState {
+  const p = (persisted as Partial<WalletState>) || {};
+  return {
+    ...current,
+    publicKey: typeof p.publicKey === 'string' ? p.publicKey : null,
+    balance: typeof p.balance === 'string' ? p.balance : '0',
+    connected: typeof p.connected === 'boolean' ? p.connected : false,
+  };
+}
+
 export const useWalletStore = create<WalletState>()(
   persist(
     (set) => ({
@@ -93,15 +112,7 @@ export const useWalletStore = create<WalletState>()(
         connected: state.connected,
       }),
       // Recover gracefully when persisted state is corrupt or missing fields.
-      merge: (persisted, current) => {
-        const p = (persisted as Partial<WalletState>) || {};
-        return {
-          ...current,
-          publicKey: typeof p.publicKey === 'string' ? p.publicKey : null,
-          balance: typeof p.balance === 'string' ? p.balance : '0',
-          connected: typeof p.connected === 'boolean' ? p.connected : false,
-        };
-      },
+      merge: (persisted, current) => rehydrateWalletState(persisted, current),
     }
   )
 );

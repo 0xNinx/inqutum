@@ -7,7 +7,7 @@
 
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { validatePublicKey, validateBalance } from '../lib/store';
+import { validatePublicKey, validateBalance, rehydrateWalletState, useWalletStore } from '../lib/store';
 
 // ─── validatePublicKey ───────────────────────────────────────────────────────
 
@@ -86,5 +86,169 @@ describe('validateBalance', () => {
   it('rejects a non-string argument', () => {
     // @ts-expect-error deliberate wrong type
     assert.throws(() => validateBalance(100), /string/);
+  });
+});
+
+// ─── rehydrateWalletState (degraded-dependency / corrupt-storage recovery) ──
+
+describe('rehydrateWalletState', () => {
+  const VALID_KEY = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
+
+  // Minimal stand-in for the WalletState "current" defaults.
+  function makeDefaults(): any {
+    return {
+      publicKey: null,
+      balance: '0',
+      connected: false,
+      lastError: null,
+      setWallet: () => {},
+      updateBalance: () => {},
+      disconnect: () => {},
+      clearError: () => {},
+    };
+  }
+
+  it('restores valid persisted fields verbatim', () => {
+    const result = rehydrateWalletState(
+      { publicKey: VALID_KEY, balance: '12.5', connected: true },
+      makeDefaults()
+    );
+    assert.equal(result.publicKey, VALID_KEY);
+    assert.equal(result.balance, '12.5');
+    assert.equal(result.connected, true);
+  });
+
+  it('falls back to null publicKey when persisted value is not a string', () => {
+    for (const bad of [undefined, null, 42, {}, []]) {
+      const result = rehydrateWalletState({ publicKey: bad, balance: '0', connected: false }, makeDefaults());
+      assert.equal(result.publicKey, null, String(bad));
+    }
+  });
+
+  it('falls back to "0" balance when persisted value is not a string', () => {
+    for (const bad of [undefined, null, 42, NaN, {}]) {
+      const result = rehydrateWalletState({ publicKey: null, balance: bad, connected: false }, makeDefaults());
+      assert.equal(result.balance, '0', String(bad));
+    }
+  });
+
+  it('falls back to false connected when persisted value is not a boolean', () => {
+    for (const bad of [undefined, null, 1, 'true', {}]) {
+      const result = rehydrateWalletState({ publicKey: null, balance: '0', connected: bad }, makeDefaults());
+      assert.equal(result.connected, false, String(bad));
+    }
+  });
+
+  it('handles a fully null/undefined persisted object without throwing', () => {
+    const result = rehydrateWalletState(null, makeDefaults());
+    assert.equal(result.publicKey, null);
+    assert.equal(result.balance, '0');
+    assert.equal(result.connected, false);
+  });
+
+  it('handles an empty persisted object without throwing', () => {
+    const result = rehydrateWalletState({}, makeDefaults());
+    assert.equal(result.publicKey, null);
+    assert.equal(result.balance, '0');
+    assert.equal(result.connected, false);
+  });
+
+  it('preserves the action functions from the current (live) defaults', () => {
+    const defaults = makeDefaults();
+    const result = rehydrateWalletState({ publicKey: VALID_KEY, balance: '1', connected: true }, defaults);
+    assert.equal(result.setWallet, defaults.setWallet);
+    assert.equal(result.disconnect, defaults.disconnect);
+    assert.equal(result.clearError, defaults.clearError);
+  });
+});
+
+// ─── useWalletStore — store boundary (success / validation / error lifecycle) ─
+
+describe('useWalletStore', () => {
+  const VALID_KEY = 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
+
+  it('setWallet succeeds with a valid key and balance and clears lastError', () => {
+    const store = useWalletStore.getState();
+    // Start clean.
+    store.disconnect();
+    const result = store.setWallet(VALID_KEY, '10.5');
+    const s = useWalletStore.getState();
+    assert.equal(result.ok, true);
+    assert.equal(s.publicKey, VALID_KEY);
+    assert.equal(s.balance, '10.5');
+    assert.equal(s.connected, true);
+    assert.equal(s.lastError, null);
+  });
+
+  it('setWallet returns ok:false and records lastError for an invalid public key', () => {
+    const store = useWalletStore.getState();
+    store.disconnect();
+    const result = store.setWallet('NOT_A_KEY', '1');
+    const s = useWalletStore.getState();
+    assert.equal(result.ok, false);
+    assert.ok(typeof result.error === 'string' && result.error.length > 0);
+    assert.equal(s.connected, false);
+    assert.ok(s.lastError !== null);
+  });
+
+  it('setWallet returns ok:false and records lastError for an invalid balance', () => {
+    const store = useWalletStore.getState();
+    store.disconnect();
+    const result = store.setWallet(VALID_KEY, '-5');
+    const s = useWalletStore.getState();
+    assert.equal(result.ok, false);
+    assert.ok(s.lastError !== null);
+  });
+
+  it('updateBalance succeeds and clears lastError', () => {
+    const store = useWalletStore.getState();
+    store.disconnect();
+    store.setWallet(VALID_KEY, '1');
+    const result = store.updateBalance('99.0000000');
+    const s = useWalletStore.getState();
+    assert.equal(result.ok, true);
+    assert.equal(s.balance, '99.0000000');
+    assert.equal(s.lastError, null);
+  });
+
+  it('updateBalance returns ok:false for a negative balance', () => {
+    const store = useWalletStore.getState();
+    store.disconnect();
+    store.setWallet(VALID_KEY, '1');
+    const result = store.updateBalance('-1');
+    assert.equal(result.ok, false);
+    assert.ok(useWalletStore.getState().lastError !== null);
+  });
+
+  it('clearError resets lastError to null without touching other fields', () => {
+    const store = useWalletStore.getState();
+    // Force an error into the store.
+    store.setWallet('BAD', '0');
+    assert.ok(useWalletStore.getState().lastError !== null);
+    store.clearError();
+    assert.equal(useWalletStore.getState().lastError, null);
+  });
+
+  it('disconnect resets every field to safe defaults', () => {
+    const store = useWalletStore.getState();
+    store.setWallet(VALID_KEY, '50');
+    store.disconnect();
+    const s = useWalletStore.getState();
+    assert.equal(s.publicKey, null);
+    assert.equal(s.balance, '0');
+    assert.equal(s.connected, false);
+    assert.equal(s.lastError, null);
+  });
+
+  it('a second valid setWallet overwrites state from the first (retry path)', () => {
+    const store = useWalletStore.getState();
+    store.disconnect();
+    const KEY2 = 'G' + 'C'.repeat(55);
+    store.setWallet(VALID_KEY, '1');
+    const result = store.setWallet(KEY2, '2');
+    const s = useWalletStore.getState();
+    assert.equal(result.ok, true);
+    assert.equal(s.publicKey, KEY2);
+    assert.equal(s.balance, '2');
   });
 });
