@@ -20,6 +20,7 @@ import { buildUserSafeErrorResponse, classifyError } from './errors/error-taxono
 
 import { validateEnvironment } from './config/env-validator';
 import { VERIFICATION_CONTRACT_VERSION } from './services/payment-verification';
+import { strictInputLimitsMiddleware } from './security/input-limits';
 
 // Load environment variables
 dotenv.config();
@@ -42,8 +43,9 @@ app.use(securityHeaders());
 // Middleware
 app.use(cors(corsOptions()));
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '100kb' }));
+app.use(express.urlencoded({ extended: true, limit: '100kb', parameterLimit: 20 }));
+app.use(strictInputLimitsMiddleware());
 
 // Request logging
 app.use((req: Request, res: Response, next: NextFunction) => {

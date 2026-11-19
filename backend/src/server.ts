@@ -15,6 +15,7 @@ import { PostgresJobStore } from './jobs/postgres-job-store';
 import { registerJobHandlers, startExpiryScheduler } from './jobs/runtime';
 import { buildUserSafeErrorResponse, classifyError } from './errors/error-taxonomy';
 import { validateEnvironment } from './config/env-validator';
+import { strictInputLimitsMiddleware } from './security/input-limits';
 
 dotenv.config();
 
@@ -42,8 +43,9 @@ app.use(securityHeaders());
 
 app.use(cors(corsOptions()));
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '100kb' }));
+app.use(express.urlencoded({ extended: true, limit: '100kb', parameterLimit: 20 }));
+app.use(strictInputLimitsMiddleware());
 
 app.use((req: Request, res: Response, next: NextFunction) => {
   console.log(`${new Date().toISOString()} [${req.correlationId}] - ${req.method} ${req.path}`);

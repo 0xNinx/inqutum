@@ -2,6 +2,7 @@ import { Request, Response, Router } from 'express';
 import { stellarPublicKeySchema } from '../utils/validation';
 import { sendFailure, sendSuccess } from '../types/api';
 import { NotificationService, notificationService } from '../notifications/notification-service';
+import { verifyReceiptAuthenticity, type DeliveryReceiptChannel, type DeliveryReceiptStatus } from '../notifications/delivery-receipt';
 
 export interface NotificationRouterOptions {
   service?: NotificationService;
@@ -99,6 +100,59 @@ export function createNotificationRouter(options: NotificationRouterOptions = {}
     if (!recipient) return;
     const records = service.getRoutingAudit(recipient);
     sendSuccess(res, 200, { records, total: records.length });
+  });
+
+  router.get('/notifications/receipts', (req, res) => {
+    const recipient = recipientOf(req, res);
+    if (!recipient) return;
+    const dedupKey = typeof req.query.dedupKey === 'string' ? req.query.dedupKey : undefined;
+    const channel = typeof req.query.channel === 'string' ? (req.query.channel as DeliveryReceiptChannel) : undefined;
+    const status = typeof req.query.status === 'string' ? (req.query.status as DeliveryReceiptStatus) : undefined;
+    const limit = int(req.query.limit, 50);
+    const offset = int(req.query.offset, 0);
+
+    const result = service.listReceipts(recipient, { dedupKey, channel, status, limit, offset });
+    sendSuccess(res, 200, { receipts: result.receipts }, {
+      pagination: { limit, offset, total: result.total },
+    });
+  });
+
+  router.get('/notifications/receipts/:id', (req, res) => {
+    const recipient = recipientOf(req, res);
+    if (!recipient) return;
+    const receipt = service.getReceipt(req.params.id, recipient);
+    if (!receipt) {
+      return sendFailure(res, 404, 'Delivery receipt not found', {
+        code: 'RECEIPT_NOT_FOUND',
+        correlationId: req.correlationId,
+      });
+    }
+    sendSuccess(res, 200, receipt);
+  });
+
+  router.post('/notifications/receipts/:id/ack', (req, res) => {
+    const recipient = recipientOf(req, res);
+    if (!recipient) return;
+    const receipt = service.acknowledgeReceipt(recipient, req.params.id);
+    if (!receipt) {
+      return sendFailure(res, 404, 'Delivery receipt not found', {
+        code: 'RECEIPT_NOT_FOUND',
+        correlationId: req.correlationId,
+      });
+    }
+    sendSuccess(res, 200, receipt);
+  });
+
+  router.post('/notifications/receipts/verify', (req, res) => {
+    const receipt = req.body;
+    if (!receipt || !receipt.receiptHash) {
+      return sendFailure(res, 400, 'Invalid receipt payload', {
+        code: 'INVALID_RECEIPT',
+        correlationId: req.correlationId,
+      });
+    }
+    const valid = verifyReceiptAuthenticity(receipt);
+    sendSuccess(res, 200, { verified: valid, receiptId: receipt.receiptId });
   });
 
   return router;
