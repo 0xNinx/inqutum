@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   type VARCHAR(100) NOT NULL,
   payload JSONB NOT NULL,
   status VARCHAR(20) NOT NULL DEFAULT 'queued'
-    CHECK (status IN ('queued', 'running', 'succeeded', 'dead')),
+    CHECK (status IN ('queued', 'running', 'succeeded', 'dead', 'cancelled')),
   attempts INTEGER NOT NULL DEFAULT 0,
   retry_policy JSONB NOT NULL,
   run_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

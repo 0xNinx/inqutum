@@ -99,6 +99,54 @@ export const DOMAIN_ERROR_TAXONOMY: Record<string, DomainErrorDefinition> = {
       'Resubmit the form.',
     ],
   },
+  PAYLOAD_TOO_LARGE: {
+    code: 'PAYLOAD_TOO_LARGE',
+    category: 'VALIDATION',
+    httpStatus: 413,
+    retryable: false,
+    userSafeMessage: 'Request payload exceeds maximum allowable size',
+    recoveryAction: 'Reduce the payload size to under 100 KB before resubmitting.',
+    remediation: [
+      'Split large operations or batches into smaller requests.',
+      'Remove unnecessary metadata or attachments from the request body.',
+    ],
+  },
+  CARDINALITY_LIMIT_EXCEEDED: {
+    code: 'CARDINALITY_LIMIT_EXCEEDED',
+    category: 'VALIDATION',
+    httpStatus: 400,
+    retryable: false,
+    userSafeMessage: 'Request property cardinality exceeds allowed limit',
+    recoveryAction: 'Reduce the number of properties, keys, or array items.',
+    remediation: [
+      'Keep metadata or filter parameters to under 50 keys.',
+      'Ensure array parameters contain no more than 100 elements.',
+    ],
+  },
+  INPUT_DEPTH_EXCEEDED: {
+    code: 'INPUT_DEPTH_EXCEEDED',
+    category: 'VALIDATION',
+    httpStatus: 400,
+    retryable: false,
+    userSafeMessage: 'JSON nesting depth exceeds safety threshold',
+    recoveryAction: 'Flatten deep nested structures before submitting.',
+    remediation: [
+      'Ensure request data nesting is 5 levels or fewer.',
+      'Flatten nested objects into shallow key-value pairs.',
+    ],
+  },
+  QUERY_TOO_LARGE: {
+    code: 'QUERY_TOO_LARGE',
+    category: 'VALIDATION',
+    httpStatus: 400,
+    retryable: false,
+    userSafeMessage: 'URL query string length exceeds maximum allowable limit',
+    recoveryAction: 'Shorten query string parameters or use request body.',
+    remediation: [
+      'Reduce the length and number of query parameters.',
+      'Omit default filter values to keep URL concise.',
+    ],
+  },
   INVOICE_ALREADY_PAID: {
     code: 'INVOICE_ALREADY_PAID',
     category: 'LIFECYCLE',
@@ -649,6 +697,42 @@ export const DOMAIN_ERROR_TAXONOMY: Record<string, DomainErrorDefinition> = {
       'Wait for automatic retries to exhaust, then retry this action.',
     ],
   },
+  JOB_ALREADY_COMPLETED: {
+    code: 'JOB_ALREADY_COMPLETED',
+    category: 'LIFECYCLE',
+    httpStatus: 409,
+    retryable: false,
+    userSafeMessage: 'Succeeded jobs cannot be cancelled',
+    recoveryAction: 'The job has already succeeded. Safe cancellation cannot rollback a completed job.',
+    remediation: [
+      'Inspect the completed job result via GET /api/jobs/:id.',
+      'If the work needs to be undone, execute an application-level compensating action.',
+    ],
+  },
+  JOB_NOT_CANCELLABLE: {
+    code: 'JOB_NOT_CANCELLABLE',
+    category: 'LIFECYCLE',
+    httpStatus: 409,
+    retryable: false,
+    userSafeMessage: 'Job cannot be cancelled in its current state',
+    recoveryAction: 'Verify the job status before attempting cancellation.',
+    remediation: [
+      'Check the current status with GET /api/jobs/:id.',
+      'Only queued, running, or dead jobs can be cancelled.',
+    ],
+  },
+  JOB_CANCELLED: {
+    code: 'JOB_CANCELLED',
+    category: 'LIFECYCLE',
+    httpStatus: 400,
+    retryable: false,
+    userSafeMessage: 'Job execution was cancelled',
+    recoveryAction: 'The job was stopped prior to completion. Requeue if execution is still required.',
+    remediation: [
+      'Check the cancellation reason recorded on the job.',
+      'Requeue the job via POST /api/jobs/:id/retry if desired.',
+    ],
+  },
   JOBS_UNAVAILABLE: {
     code: 'JOBS_UNAVAILABLE',
     category: 'INTERNAL',
@@ -723,6 +807,30 @@ export const DOMAIN_ERROR_TAXONOMY: Record<string, DomainErrorDefinition> = {
     remediation: [
       'Refresh the notification list for current ids.',
       'Mark-read only ids returned by the list endpoint.',
+    ],
+  },
+  RECEIPT_NOT_FOUND: {
+    code: 'RECEIPT_NOT_FOUND',
+    category: 'NOT_FOUND',
+    httpStatus: 404,
+    retryable: false,
+    userSafeMessage: 'Delivery receipt not found',
+    recoveryAction: 'Verify the receipt ID and recipient public key.',
+    remediation: [
+      'List receipts for this wallet to find the correct receipt ID.',
+      'Ensure the query includes the matching recipient public key.',
+    ],
+  },
+  INVALID_RECEIPT: {
+    code: 'INVALID_RECEIPT',
+    category: 'VALIDATION',
+    httpStatus: 400,
+    retryable: false,
+    userSafeMessage: 'Delivery receipt payload is invalid or verification failed',
+    recoveryAction: 'Provide a valid delivery receipt structure including cryptographic hash.',
+    remediation: [
+      'Ensure all receipt fields (receiptId, notificationId, dedupKey, recipient, hash) are provided.',
+      'Verify that receipt payload has not been modified.',
     ],
   },
   RECIPIENT_REQUIRED: {

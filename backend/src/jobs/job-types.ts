@@ -9,7 +9,7 @@
  * be requeued by a maintainer.
  */
 
-export type JobStatus = 'queued' | 'running' | 'succeeded' | 'dead';
+export type JobStatus = 'queued' | 'running' | 'succeeded' | 'dead' | 'cancelled';
 
 export interface RetryPolicy {
   /** Total attempts allowed, including the first one. */
@@ -63,6 +63,8 @@ export interface Job<T = Record<string, unknown>> {
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
+  cancelledAt?: string | null;
+  cancellationReason?: string | null;
 }
 
 export interface EnqueueOptions {
@@ -92,6 +94,8 @@ export interface JobStore {
   list(filter?: JobFilter): Promise<{ jobs: Job[]; total: number }>;
   /** Moves a dead job back to queued with a fresh attempt budget. */
   requeueDead(id: string, now: Date): Promise<Job | null>;
+  /** Safely cancels a queued or running job, recording the cancellation reason. */
+  cancel(id: string, reason?: string, now?: Date): Promise<Job | null>;
   counts(): Promise<Record<JobStatus, number>>;
 }
 
@@ -105,5 +109,13 @@ export class NonRetryableJobError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'NonRetryableJobError';
+  }
+}
+
+/** Thrown when a job is cancelled during execution or cooperative abort. */
+export class JobCancelledError extends Error {
+  constructor(message = 'Job execution was cancelled') {
+    super(message);
+    this.name = 'JobCancelledError';
   }
 }

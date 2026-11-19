@@ -4,10 +4,11 @@ import { Job, JobStatus, JobStore } from '../jobs/job-types';
 import { auditStore } from '../audit/audit-service';
 import { apiFailure } from '../types/api';
 
-const STATUSES: JobStatus[] = ['queued', 'running', 'succeeded', 'dead'];
+const STATUSES: JobStatus[] = ['queued', 'running', 'succeeded', 'dead', 'cancelled'];
 
 export interface JobsRouterOptions {
   store: JobStore;
+  worker?: { cancelRunningJob: (id: string, reason?: string) => Promise<Job | null> };
   /** Bearer token required for every route. When empty, the routes are disabled (403). */
   adminToken?: string;
 }
@@ -90,6 +91,44 @@ export function createJobsRouter(options: JobsRouterOptions): Router {
         metadata: { jobType: job.type },
         correlationId: req.correlationId,
       });
+      res.json({ success: true, data: view(job), correlationId: req.correlationId });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.post('/jobs/:id/cancel', async (req, res, next) => {
+    try {
+      const existing = await options.store.get(req.params.id);
+      if (!existing) {
+        return res.status(404).json(apiFailure('Job not found', { code: 'JOB_NOT_FOUND', correlationId: req.correlationId }));
+      }
+      if (existing.status === 'succeeded') {
+        return res.status(409).json(apiFailure('Succeeded jobs cannot be cancelled', { code: 'JOB_ALREADY_COMPLETED', correlationId: req.correlationId }));
+      }
+      const rawReason = typeof req.body?.reason === 'string' ? req.body.reason.trim().slice(0, 255) : undefined;
+      const reason = rawReason || 'Cancelled by administrator';
+
+      let job: Job | null = null;
+      if (options.worker && typeof options.worker.cancelRunningJob === 'function') {
+        job = await options.worker.cancelRunningJob(req.params.id, reason);
+      } else {
+        job = await options.store.cancel(req.params.id, reason, new Date());
+      }
+
+      if (!job) {
+        return res.status(409).json(apiFailure('Job cannot be cancelled in its current state', { code: 'JOB_NOT_CANCELLABLE', correlationId: req.correlationId }));
+      }
+
+      auditStore.recordEvent({
+        action: 'MAINTAINER_ACTION',
+        actor: { type: 'maintainer', id: 'jobs-admin' },
+        scope: { entityType: 'system', entityId: job.id },
+        reason: 'Job cancelled by maintainer',
+        metadata: { jobType: job.type, cancellationReason: reason },
+        correlationId: req.correlationId,
+      });
+
       res.json({ success: true, data: view(job), correlationId: req.correlationId });
     } catch (err) {
       next(err);

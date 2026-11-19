@@ -23,7 +23,8 @@ function validateJob(job: Job): void {
   requireIsoDate(job.updatedAt, 'updatedAt');
   if (job.completedAt !== null) requireIsoDate(job.completedAt, 'completedAt');
   if (job.lockedUntil !== null) requireIsoDate(job.lockedUntil, 'lockedUntil');
-  if (!['queued', 'running', 'succeeded', 'dead'].includes(job.status)) {
+  if (job.cancelledAt !== null && job.cancelledAt !== undefined) requireIsoDate(job.cancelledAt, 'cancelledAt');
+  if (!['queued', 'running', 'succeeded', 'dead', 'cancelled'].includes(job.status)) {
     throw new Error(`invalid job status: ${job.status}`);
   }
   if (!Number.isInteger(job.attempts) || job.attempts < 0) {
@@ -48,7 +49,7 @@ function validateWorker(workerId: string, leaseMs?: number): void {
 }
 
 function validateFilter(filter: JobFilter): void {
-  if (filter.status && !['queued', 'running', 'succeeded', 'dead'].includes(filter.status)) {
+  if (filter.status && !['queued', 'running', 'succeeded', 'dead', 'cancelled'].includes(filter.status)) {
     throw new Error(`invalid job status filter: ${filter.status}`);
   }
   if (filter.limit !== undefined && (!Number.isInteger(filter.limit) || filter.limit < 0)) {
@@ -158,19 +159,40 @@ export class MemoryJobStore implements JobStore {
     requireString(id, 'id');
     if (Number.isNaN(now.getTime())) throw new Error('job now must be a valid Date');
     const job = this.jobs.get(id);
-    if (!job || job.status !== 'dead') return null;
+    if (!job || (job.status !== 'dead' && job.status !== 'cancelled')) return null;
     job.status = 'queued';
     job.attempts = 0;
     job.runAt = now.toISOString();
     job.completedAt = null;
+    job.cancelledAt = null;
+    job.cancellationReason = null;
+    job.updatedAt = now.toISOString();
+    return clone(job);
+  }
+
+  async cancel(id: string, reason = 'Cancelled by administrator', now: Date = new Date()): Promise<Job | null> {
+    requireString(id, 'id');
+    if (Number.isNaN(now.getTime())) throw new Error('job now must be a valid Date');
+    const job = this.jobs.get(id);
+    if (!job) return null;
+    if (job.status === 'succeeded') return null;
+    if (job.status === 'cancelled') return clone(job);
+    job.status = 'cancelled';
+    job.lockedBy = null;
+    job.lockedUntil = null;
+    job.cancellationReason = reason;
+    job.cancelledAt = now.toISOString();
+    job.completedAt = now.toISOString();
     job.updatedAt = now.toISOString();
     return clone(job);
   }
 
   async counts(): Promise<Record<JobStatus, number>> {
-    const counts: Record<JobStatus, number> = { queued: 0, running: 0, succeeded: 0, dead: 0 };
-    for (const job of this.jobs.values()) counts[job.status] += 1;
-    return counts;
+    const counts: Record<string, number> = { queued: 0, running: 0, succeeded: 0, dead: 0 };
+    for (const job of this.jobs.values()) {
+      counts[job.status] = (counts[job.status] || 0) + 1;
+    }
+    return counts as Record<JobStatus, number>;
   }
 
   clear(): void {
