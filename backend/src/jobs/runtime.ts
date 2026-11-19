@@ -6,6 +6,8 @@ import { PostgresJobStore } from './postgres-job-store';
 export const EXPIRE_PENDING_INVOICES_JOB = 'invoices.expire-pending';
 export const EXPIRY_SWEEP_INTERVAL_MS = 60_000;
 export const RESUMABLE_REPAIR_JOB = 'records.resumable-repair';
+/** Detect-only projection reconciliation (#255). Never repairs; apply goes through /ops/reconciliation. */
+export const RECONCILE_PROJECTIONS_JOB = 'projections.reconcile';
 
 export interface JobHandlerDeps {
   /** Marks overdue PENDING invoices EXPIRED and returns how many changed. Must be idempotent. */
@@ -18,6 +20,8 @@ export interface JobHandlerDeps {
     phases?: any[];
     maxBatches?: number;
   }) => Promise<unknown>;
+  /** Dry-run reconciliation of derived projections against storage. */
+  reconcileProjections?: () => Promise<unknown>;
 }
 
 function assertPositiveFiniteNumber(value: number, name: string): void {
@@ -78,6 +82,10 @@ export function registerJobHandlers(worker: JobWorker, deps: JobHandlerDeps): Jo
     });
   }
 
+  if (deps.reconcileProjections) {
+    worker.register(RECONCILE_PROJECTIONS_JOB, async () => deps.reconcileProjections!());
+  }
+
   return worker;
 }
 
@@ -99,6 +107,21 @@ export function scheduleExpirySweep(queue: JobQueue, now: Date = new Date(), int
   return queue.enqueue(EXPIRE_PENDING_INVOICES_JOB, {}, {
     idempotencyKey: `${EXPIRE_PENDING_INVOICES_JOB}:${bucket}`,
     retryPolicy: { maxAttempts: 3, baseDelayMs: 5_000 },
+  });
+}
+
+/**
+ * Enqueues one detect-only reconciliation per interval bucket (#255). The
+ * search index lives in the API process, so only the embedded worker
+ * registers this job type; a standalone worker never claims it.
+ */
+export function scheduleReconciliation(queue: JobQueue, now: Date = new Date(), intervalMs: number) {
+  assertJobQueue(queue);
+  assertPositiveFiniteNumber(intervalMs, 'intervalMs');
+  const bucket = Math.floor(now.getTime() / intervalMs);
+  return queue.enqueue(RECONCILE_PROJECTIONS_JOB, {}, {
+    idempotencyKey: `${RECONCILE_PROJECTIONS_JOB}:${bucket}`,
+    retryPolicy: { maxAttempts: 2, baseDelayMs: 30_000 },
   });
 }
 

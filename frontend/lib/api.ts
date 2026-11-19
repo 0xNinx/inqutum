@@ -150,6 +150,14 @@ export const healthCheck = USE_MOCK_API ? mockHealthCheck : async () => {
   return response.data;
 };
 
+// Public service status (#254). Mock mode and unconfigured APIs report operational;
+// a backend without /status rejects, and the caller treats that as "no banner".
+export const getPublicStatus = async (): Promise<unknown> => {
+  if (USE_MOCK_API || !API_CONFIG.configured) return { state: 'operational' };
+  const response = await api.get('/status');
+  return response.data?.data;
+};
+
 export { apiErrorMessage, isApiUnavailableError };
 
 export default api;
