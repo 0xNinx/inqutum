@@ -31,7 +31,14 @@ export type AuditAction =
   | 'DUPLICATE_MERGE_APPROVED'
   | 'DUPLICATE_MERGE_REJECTED'
   | 'DUPLICATE_MERGE_REVERTED'
-  | 'DUPLICATE_MERGE_FINALIZED';
+  | 'DUPLICATE_MERGE_FINALIZED'
+  | 'AUTHORIZATION_GRANTED'
+  | 'AUTHORIZATION_REVOKED'
+  | 'AUTHORIZATION_CLEANED'
+  | 'AUTHORIZATION_RENEWAL_REQUESTED'
+  | 'AUTHORIZATION_RENEWAL_REJECTED'
+  | 'AUTHORIZATION_RENEWED'
+  | 'AUTHORIZATION_DENIED';
 
 export type AuditActorType = 'seller' | 'payer' | 'system' | 'maintainer';
 
@@ -43,7 +50,7 @@ export interface AuditActor {
 }
 
 export interface AuditScope {
-  entityType: 'invoice' | 'system' | 'stellar' | 'config';
+  entityType: 'invoice' | 'system' | 'stellar' | 'config' | 'authorization';
   entityId: string;
 }
 

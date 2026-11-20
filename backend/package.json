@@ -28,6 +28,7 @@
     "recovery:check": "tsx ../scripts/incident-drill.ts --recovery --check",
     "db:import": "tsx src/imports/import-cli.ts",
     "db:seed": "tsx src/db/seed.ts",
+    "seed:fixtures": "tsx src/db/seed-fixtures-cli.ts",
     "diagnostics": "tsx ../scripts/diagnostics.ts",
     "evidence:pack": "tsx ../scripts/generate-evidence-pack.ts",
     "evidence:check": "tsx ../scripts/generate-evidence-pack.ts --check",
@@ -36,6 +37,9 @@
     "test:load:cardinality": "tsx ../scripts/load-cardinality-burst.ts",
     "export:trends": "tsx ../scripts/export-trends.ts",
     "policy:simulate": "tsx ../scripts/simulate-policy.ts",
+    "impact:analyze": "tsx scripts/impact-analysis.ts",
+    "auth:stale": "tsx scripts/stale-authorizations.ts",
+    "rollback:verify": "tsx scripts/verify-release-rollback.ts",
     "errors:catalog": "tsx scripts/generate-error-catalog.ts",
     "typecheck": "tsc --noEmit"
   },

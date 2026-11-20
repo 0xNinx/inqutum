@@ -49,6 +49,13 @@ Every audit event carries `id, timestamp, action, actor.type, actor.id, scope.en
 | `PROOF_EXPORTED` | audit_only | `metadata.schemaVersion`, `metadata.recordCount`, `metadata.format` | export routes (log_and_continue) | audit query |
 | `CONFIG_CHANGED` | audit_only | `reason`, `metadata.configKey`, `metadata.change` | admin config, rollout guard, public status (all refuse_and_report: no evidence, no change) | audit query |
 | `MAINTAINER_ACTION` | audit_only | `reason` | ops routes, jobs routes (log_and_continue) | audit query |
+| `AUTHORIZATION_GRANTED` | audit_only | grant snapshot in `afterState` | authorization lifecycle (log_and_continue) | audit query |
+| `AUTHORIZATION_REVOKED` | audit_only | `metadata.reason` | authorization lifecycle (log_and_continue) | audit query |
+| `AUTHORIZATION_CLEANED` | audit_only | `metadata.expiredForMs` | authorization lifecycle (log_and_continue) | audit query |
+| `AUTHORIZATION_RENEWAL_REQUESTED` | audit_only | `metadata.renewalRequestId`, `metadata.reason` | authorization lifecycle (log_and_continue) | audit query |
+| `AUTHORIZATION_RENEWAL_REJECTED` | audit_only | `metadata.renewalRequestId` | authorization lifecycle (log_and_continue) | audit query |
+| `AUTHORIZATION_RENEWED` | audit_only | `metadata.renewalRequestId`, `metadata.newGrantId`, `metadata.requestedBy` | authorization lifecycle (log_and_continue) | audit query |
+| `AUTHORIZATION_DENIED` | audit_only | `metadata.action`, `metadata.reason` | authorization lifecycle (log_and_continue) | audit query |
 
 ### Notification channel
 
@@ -74,6 +81,7 @@ Every job carries `id, type, payload.version, payload.data`. Consumers are `retr
 | `projections.reconcile` | active | Detect only. Opt in with `RECONCILIATION_INTERVAL_MS`. Only the embedded worker runs it (see `RECONCILIATION.md`). |
 | `records.resumable-repair` | **no_producer** | A handler is registered, but `/ops/repair-records` runs the service inline. |
 | `retention.sweep` | **no_producer** | A handler is registered, but no scheduler enqueues it. |
+| `authorizations.cleanup-stale` | **no_producer** | A handler is registered when `cleanupStaleAuthorizations` is wired. Nothing schedules it yet. Applies unless `payload.data.dryRun` is `true`. |
 
 ## Known gaps (found while building the map)
 

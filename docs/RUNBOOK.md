@@ -448,6 +448,27 @@ To reverse a migration:
    type), you must write a new forward migration to undo it and deploy that.
 4. Always test migrations against a staging database before production.
 
+### Verify data after a rollback
+
+Run this after any code rollback, once `/api/health` reports the restored
+version. It is read-only.
+
+1. Confirm schema and version: see [ROLLBACK_VERIFICATION.md](./ROLLBACK_VERIFICATION.md)
+   (`runFullRollbackVerification`).
+2. Run the post-rollback data verification (`verifyReleaseRollback`) for the
+   window in which the bad release was live. To rehearse it, run
+   `cd backend && npm run rollback:verify -- --fixture partial`.
+3. Act on the exit code:
+   - `0` clean: optionally spot-check the `review` findings.
+   - `1` needs repair: work through `manualRepair`. Drain unknown job types
+     **before** restarting workers. Query providers for `external.pending`
+     references before retrying anything. Re-run payment verification for
+     `invoices.partial_settlement` records.
+   - `2` failed: the rollback did not take effect. Repeat the rollback steps
+     above, then verify again.
+4. Re-run the verification until it exits `0`, and attach the JSON report
+   (`--json`) to the incident record.
+
 ### Drain or pause the job queue
 
 To stop workers from picking up new jobs without losing queued work:
