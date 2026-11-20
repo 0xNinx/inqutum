@@ -27,7 +27,19 @@ export type AuditAction =
   | 'IMPERSONATION_ACTION_ALLOWED'
   | 'IMPERSONATION_ACTION_BLOCKED'
   | 'CAPABILITY_ISSUED'
-  | 'CONFIG_CHANGED';
+  | 'CONFIG_CHANGED'
+  | 'DUPLICATE_MERGE_PROPOSED'
+  | 'DUPLICATE_MERGE_APPROVED'
+  | 'DUPLICATE_MERGE_REJECTED'
+  | 'DUPLICATE_MERGE_REVERTED'
+  | 'DUPLICATE_MERGE_FINALIZED'
+  | 'AUTHORIZATION_GRANTED'
+  | 'AUTHORIZATION_REVOKED'
+  | 'AUTHORIZATION_CLEANED'
+  | 'AUTHORIZATION_RENEWAL_REQUESTED'
+  | 'AUTHORIZATION_RENEWAL_REJECTED'
+  | 'AUTHORIZATION_RENEWED'
+  | 'AUTHORIZATION_DENIED';
 
 export type AuditActorType = 'seller' | 'payer' | 'system' | 'maintainer';
 
@@ -39,7 +51,7 @@ export interface AuditActor {
 }
 
 export interface AuditScope {
-  entityType: 'invoice' | 'system' | 'stellar' | 'config';
+  entityType: 'invoice' | 'system' | 'stellar' | 'config' | 'authorization';
   entityId: string;
 }
 
@@ -237,6 +249,7 @@ export class MemoryAuditStore {
     this.eventsById.clear();
     this.eventsByEntity.clear();
     this.eventsByActor.clear();
+    this.evictedHeadHash = null;
   }
 
   size(): number {

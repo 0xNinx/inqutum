@@ -24,6 +24,8 @@ export function rowToJob(row: any): Job {
     createdAt: iso(row.created_at)!,
     updatedAt: iso(row.updated_at)!,
     completedAt: iso(row.completed_at),
+    cancelledAt: row.status === 'cancelled' ? (row.cancelled_at ? iso(row.cancelled_at) : iso(row.completed_at)) : null,
+    cancellationReason: row.cancellation_reason ?? row.result?.cancellationReason ?? null,
   };
 }
 
@@ -108,16 +110,31 @@ export class PostgresJobStore implements JobStore {
   async requeueDead(id: string, now: Date): Promise<Job | null> {
     const res = await this.pool.query(
       `UPDATE jobs SET status = 'queued', attempts = 0, run_at = $2, completed_at = NULL, updated_at = $2
-       WHERE id = $1 AND status = 'dead' RETURNING ${COLUMNS}`,
+       WHERE id = $1 AND status IN ('dead', 'cancelled') RETURNING ${COLUMNS}`,
       [id, now]
     );
     return res.rows[0] ? rowToJob(res.rows[0]) : null;
   }
 
+  async cancel(id: string, reason = 'Cancelled by administrator', now: Date = new Date()): Promise<Job | null> {
+    const res = await this.pool.query(
+      `UPDATE jobs SET status = 'cancelled', locked_by = NULL, locked_until = NULL,
+              completed_at = $2, updated_at = $2,
+              result = COALESCE(result, jsonb_build_object('cancellationReason', $3::text))
+       WHERE id = $1 AND status IN ('queued', 'running', 'dead')
+       RETURNING ${COLUMNS}`,
+      [id, now, reason]
+    );
+    if (res.rows[0]) return rowToJob(res.rows[0]);
+    const existing = await this.get(id);
+    if (existing && existing.status === 'cancelled') return existing;
+    return null;
+  }
+
   async counts(): Promise<Record<JobStatus, number>> {
     const res = await this.pool.query(`SELECT status, COUNT(*)::int AS n FROM jobs GROUP BY status`);
-    const counts: Record<JobStatus, number> = { queued: 0, running: 0, succeeded: 0, dead: 0 };
-    for (const row of res.rows) counts[row.status as JobStatus] = row.n;
-    return counts;
+    const counts: Record<string, number> = { queued: 0, running: 0, succeeded: 0, dead: 0 };
+    for (const row of res.rows) counts[row.status] = row.n;
+    return counts as Record<JobStatus, number>;
   }
 }

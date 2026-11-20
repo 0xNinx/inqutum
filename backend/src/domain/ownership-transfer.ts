@@ -43,6 +43,7 @@ export interface OwnershipTransferRecord {
   cancelledAt?: Date;
   rejectedAt?: Date;
   previousOwnerRolePostTransfer: PostTransferPreviousOwnerRole;
+  retryOfTransferId?: string;
 }
 
 export interface InitiateTransferInput {

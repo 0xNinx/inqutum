@@ -186,7 +186,7 @@ regenerating fails `backend/tests/error-remediation.test.ts`.
 | `INVALID_EXPORT_REQUEST` | 400 | VALIDATION | no | Fix the request fields listed in the message. | 1. Read the field errors joined in the message body.<br>2. Resend a corrected export request. | |
 | `REQUESTER_REQUIRED` | 400 | VALIDATION | no | Add ?requester=<public key> so the export can be scoped to you. | 1. Append the requester query parameter with your public key.<br>2. Resend the request. | |
 
-### Inbound webhooks (4 codes)
+### Inbound webhooks (10 codes)
 
 | Code | HTTP | Category | Retryable | Recovery action | Remediation hints |
 | --- | --- | --- | --- | --- | --- |
@@ -194,6 +194,12 @@ regenerating fails `backend/tests/error-remediation.test.ts`.
 | `STALE_TIMESTAMP` | 408 | VALIDATION | yes | Sign the payload again with the current time and retry. | 1. Regenerate X-Webhook-Timestamp with the current epoch seconds.<br>2. Re-sign the body with the fresh timestamp and resend. | |
 | `INVALID_SIGNATURE` | 401 | AUTHORIZATION | no | Sign the raw body with the shared secret using the documented scheme. | 1. Recompute the signature over the exact raw body with WEBHOOK_SIGNING_SECRET.<br>2. Confirm the header format sha256=<hex>, then resend. | |
 | `DUPLICATE_EVENT` | 409 | LIFECYCLE | no | This event id was already processed; use a new event id for a new event. | 1. Treat the event as successfully handled.<br>2. Generate a fresh X-Webhook-Event-Id only for genuinely new events. | |
+| `WEBHOOK_EVENT_ID_INVALID` | 400 | VALIDATION | no | Provide a non-empty provider name and an event ID of at most 255 characters. | 1. Ensure the provider name and event ID headers/fields are present and non-empty.<br>2. Truncate or reformat the event ID to stay within 255 characters, then resend. | |
+| `WEBHOOK_SIGNATURE_INVALID` | 401 | AUTHORIZATION | no | Verify that the webhook signature matches the shared secret and raw request body. | 1. Check that the webhook signing secret configured on the sender matches the receiver.<br>2. Compute the HMAC signature over the exact unmodified raw payload bytes before sending. | |
+| `WEBHOOK_DEDUPE_STORE_UNAVAILABLE` | 503 | INTERNAL | yes | The idempotency storage layer is unavailable. Retry the delivery with exponential backoff. | 1. Retry the webhook delivery after a short delay (e.g. 1-5 seconds) with backoff.<br>2. Check the health and network connectivity of the underlying persistence or Redis store. | |
+| `WEBHOOK_EVENT_IN_PROGRESS` | 409 | LIFECYCLE | yes | Another worker is currently processing this event. Retry shortly to receive the completed result. | 1. Wait 1-2 seconds and retry with the same event ID to receive the completed response.<br>2. Ensure provider delivery retry intervals allow preceding attempts to finish processing. | |
+| `WEBHOOK_EVENT_ID_CONFLICT` | 422 | VALIDATION | no | Do not reuse an existing event ID with conflicting payload content. Use a new event ID for distinct events. | 1. Verify that distinct webhook events generate distinct, globally unique event IDs.<br>2. If modifying an existing event payload, assign a new event ID before sending. | |
+| `WEBHOOK_EVENT_ID_EXPIRED` | 410 | LIFECYCLE | no | The retention window for this event ID has expired. Submit new events with fresh event IDs. | 1. Do not resend webhook events older than the 7-day retention TTL window.<br>2. Generate a new event ID if the event must be processed again. | |
 
 ### Capability tokens (9 codes)
 

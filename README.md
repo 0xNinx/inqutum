@@ -251,6 +251,10 @@ npm run db:seed      # optional: sample invoices for two demo wallets
   visible locally. Swap a seed `seller_public_key` for your own Freighter address
   to see the rows in your dashboard.
 - Runners: `backend/src/db/migrate.ts`, `backend/src/db/seed.ts`.
+- Edge-case fixtures (failed settlement, revoked access, overdue workflow,
+  historical records): `npm run seed:fixtures` validates them with no database,
+  and `npm run seed:fixtures -- --apply --anchor now` loads them. See
+  [`docs/SEED_FIXTURES.md`](./docs/SEED_FIXTURES.md).
 
 ### 3) Run the Postgres backend
 
@@ -382,6 +386,7 @@ Background jobs (retries, dead-letter queue, running workers): [`docs/JOBS.md`](
 Stuck jobs and payments: [`docs/PARTIAL-FAILURES.md`](./docs/PARTIAL-FAILURES.md). Business rules: [`docs/POLICY.md`](./docs/POLICY.md). Activity timeline: [`docs/ACTIVITY-TIMELINE.md`](./docs/ACTIVITY-TIMELINE.md). Sandbox mode: [`docs/SANDBOX.md`](./docs/SANDBOX.md).
 Accessibility conventions and checks: [`docs/ACCESSIBILITY.md`](./docs/ACCESSIBILITY.md).
 Notifications: [`docs/NOTIFICATIONS.md`](./docs/NOTIFICATIONS.md). Data exports: [`docs/EXPORTS.md`](./docs/EXPORTS.md). Untrusted content and URL handling: [`docs/CONTENT_SAFETY.md`](./docs/CONTENT_SAFETY.md).
+Impact analysis: [`docs/DEPENDENCY_GRAPH.md`](./docs/DEPENDENCY_GRAPH.md). Authorization expiry and renewal: [`docs/AUTHORIZATION_LIFECYCLE.md`](./docs/AUTHORIZATION_LIFECYCLE.md). Post-rollback verification: [`docs/ROLLBACK_VERIFICATION.md`](./docs/ROLLBACK_VERIFICATION.md).
 
 ## Tests & CI
 

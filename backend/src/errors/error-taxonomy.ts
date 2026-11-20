@@ -99,6 +99,54 @@ export const DOMAIN_ERROR_TAXONOMY: Record<string, DomainErrorDefinition> = {
       'Resubmit the form.',
     ],
   },
+  PAYLOAD_TOO_LARGE: {
+    code: 'PAYLOAD_TOO_LARGE',
+    category: 'VALIDATION',
+    httpStatus: 413,
+    retryable: false,
+    userSafeMessage: 'Request payload exceeds maximum allowable size',
+    recoveryAction: 'Reduce the payload size to under 100 KB before resubmitting.',
+    remediation: [
+      'Split large operations or batches into smaller requests.',
+      'Remove unnecessary metadata or attachments from the request body.',
+    ],
+  },
+  CARDINALITY_LIMIT_EXCEEDED: {
+    code: 'CARDINALITY_LIMIT_EXCEEDED',
+    category: 'VALIDATION',
+    httpStatus: 400,
+    retryable: false,
+    userSafeMessage: 'Request property cardinality exceeds allowed limit',
+    recoveryAction: 'Reduce the number of properties, keys, or array items.',
+    remediation: [
+      'Keep metadata or filter parameters to under 50 keys.',
+      'Ensure array parameters contain no more than 100 elements.',
+    ],
+  },
+  INPUT_DEPTH_EXCEEDED: {
+    code: 'INPUT_DEPTH_EXCEEDED',
+    category: 'VALIDATION',
+    httpStatus: 400,
+    retryable: false,
+    userSafeMessage: 'JSON nesting depth exceeds safety threshold',
+    recoveryAction: 'Flatten deep nested structures before submitting.',
+    remediation: [
+      'Ensure request data nesting is 5 levels or fewer.',
+      'Flatten nested objects into shallow key-value pairs.',
+    ],
+  },
+  QUERY_TOO_LARGE: {
+    code: 'QUERY_TOO_LARGE',
+    category: 'VALIDATION',
+    httpStatus: 400,
+    retryable: false,
+    userSafeMessage: 'URL query string length exceeds maximum allowable limit',
+    recoveryAction: 'Shorten query string parameters or use request body.',
+    remediation: [
+      'Reduce the length and number of query parameters.',
+      'Omit default filter values to keep URL concise.',
+    ],
+  },
   INVOICE_ALREADY_PAID: {
     code: 'INVOICE_ALREADY_PAID',
     category: 'LIFECYCLE',
@@ -649,6 +697,42 @@ export const DOMAIN_ERROR_TAXONOMY: Record<string, DomainErrorDefinition> = {
       'Wait for automatic retries to exhaust, then retry this action.',
     ],
   },
+  JOB_ALREADY_COMPLETED: {
+    code: 'JOB_ALREADY_COMPLETED',
+    category: 'LIFECYCLE',
+    httpStatus: 409,
+    retryable: false,
+    userSafeMessage: 'Succeeded jobs cannot be cancelled',
+    recoveryAction: 'The job has already succeeded. Safe cancellation cannot rollback a completed job.',
+    remediation: [
+      'Inspect the completed job result via GET /api/jobs/:id.',
+      'If the work needs to be undone, execute an application-level compensating action.',
+    ],
+  },
+  JOB_NOT_CANCELLABLE: {
+    code: 'JOB_NOT_CANCELLABLE',
+    category: 'LIFECYCLE',
+    httpStatus: 409,
+    retryable: false,
+    userSafeMessage: 'Job cannot be cancelled in its current state',
+    recoveryAction: 'Verify the job status before attempting cancellation.',
+    remediation: [
+      'Check the current status with GET /api/jobs/:id.',
+      'Only queued, running, or dead jobs can be cancelled.',
+    ],
+  },
+  JOB_CANCELLED: {
+    code: 'JOB_CANCELLED',
+    category: 'LIFECYCLE',
+    httpStatus: 400,
+    retryable: false,
+    userSafeMessage: 'Job execution was cancelled',
+    recoveryAction: 'The job was stopped prior to completion. Requeue if execution is still required.',
+    remediation: [
+      'Check the cancellation reason recorded on the job.',
+      'Requeue the job via POST /api/jobs/:id/retry if desired.',
+    ],
+  },
   JOBS_UNAVAILABLE: {
     code: 'JOBS_UNAVAILABLE',
     category: 'INTERNAL',
@@ -723,6 +807,30 @@ export const DOMAIN_ERROR_TAXONOMY: Record<string, DomainErrorDefinition> = {
     remediation: [
       'Refresh the notification list for current ids.',
       'Mark-read only ids returned by the list endpoint.',
+    ],
+  },
+  RECEIPT_NOT_FOUND: {
+    code: 'RECEIPT_NOT_FOUND',
+    category: 'NOT_FOUND',
+    httpStatus: 404,
+    retryable: false,
+    userSafeMessage: 'Delivery receipt not found',
+    recoveryAction: 'Verify the receipt ID and recipient public key.',
+    remediation: [
+      'List receipts for this wallet to find the correct receipt ID.',
+      'Ensure the query includes the matching recipient public key.',
+    ],
+  },
+  INVALID_RECEIPT: {
+    code: 'INVALID_RECEIPT',
+    category: 'VALIDATION',
+    httpStatus: 400,
+    retryable: false,
+    userSafeMessage: 'Delivery receipt payload is invalid or verification failed',
+    recoveryAction: 'Provide a valid delivery receipt structure including cryptographic hash.',
+    remediation: [
+      'Ensure all receipt fields (receiptId, notificationId, dedupKey, recipient, hash) are provided.',
+      'Verify that receipt payload has not been modified.',
     ],
   },
   RECIPIENT_REQUIRED: {
@@ -1006,7 +1114,8 @@ export const DOMAIN_ERROR_TAXONOMY: Record<string, DomainErrorDefinition> = {
     ],
   },
 
-  // --- Inbound webhooks (docs/API_CONTRACTS.md, hmac mode) ---
+  // --- Inbound webhooks (10 codes: MALFORMED_WEBHOOK through WEBHOOK_EVENT_ID_EXPIRED) ---
+
   MALFORMED_WEBHOOK: {
     code: 'MALFORMED_WEBHOOK',
     category: 'VALIDATION',
@@ -1053,6 +1162,200 @@ export const DOMAIN_ERROR_TAXONOMY: Record<string, DomainErrorDefinition> = {
     remediation: [
       'Treat the event as successfully handled.',
       'Generate a fresh X-Webhook-Event-Id only for genuinely new events.',
+    ],
+  },
+  WEBHOOK_EVENT_ID_INVALID: {
+    code: 'WEBHOOK_EVENT_ID_INVALID',
+    category: 'VALIDATION',
+    httpStatus: 400,
+    retryable: false,
+    userSafeMessage: 'Webhook provider and event ID must be non-empty strings up to 255 characters',
+    recoveryAction: 'Provide a non-empty provider name and an event ID of at most 255 characters.',
+    remediation: [
+      'Ensure the provider name and event ID headers/fields are present and non-empty.',
+      'Truncate or reformat the event ID to stay within 255 characters, then resend.',
+    ],
+  },
+  WEBHOOK_SIGNATURE_INVALID: {
+    code: 'WEBHOOK_SIGNATURE_INVALID',
+    category: 'AUTHORIZATION',
+    httpStatus: 401,
+    retryable: false,
+    userSafeMessage: 'Webhook provider signature verification failed',
+    recoveryAction: 'Verify that the webhook signature matches the shared secret and raw request body.',
+    remediation: [
+      'Check that the webhook signing secret configured on the sender matches the receiver.',
+      'Compute the HMAC signature over the exact unmodified raw payload bytes before sending.',
+    ],
+  },
+  WEBHOOK_DEDUPE_STORE_UNAVAILABLE: {
+    code: 'WEBHOOK_DEDUPE_STORE_UNAVAILABLE',
+    category: 'INTERNAL',
+    httpStatus: 503,
+    retryable: true,
+    userSafeMessage: 'Webhook deduplication store is temporarily unavailable',
+    recoveryAction: 'The idempotency storage layer is unavailable. Retry the delivery with exponential backoff.',
+    remediation: [
+      'Retry the webhook delivery after a short delay (e.g. 1-5 seconds) with backoff.',
+      'Check the health and network connectivity of the underlying persistence or Redis store.',
+    ],
+  },
+  WEBHOOK_EVENT_IN_PROGRESS: {
+    code: 'WEBHOOK_EVENT_IN_PROGRESS',
+    category: 'LIFECYCLE',
+    httpStatus: 409,
+    retryable: true,
+    userSafeMessage: 'Webhook event is currently being processed by another worker',
+    recoveryAction: 'Another worker is currently processing this event. Retry shortly to receive the completed result.',
+    remediation: [
+      'Wait 1-2 seconds and retry with the same event ID to receive the completed response.',
+      'Ensure provider delivery retry intervals allow preceding attempts to finish processing.',
+    ],
+  },
+  WEBHOOK_EVENT_ID_CONFLICT: {
+    code: 'WEBHOOK_EVENT_ID_CONFLICT',
+    category: 'VALIDATION',
+    httpStatus: 422,
+    retryable: false,
+    userSafeMessage: 'Webhook event ID was previously submitted with a different payload',
+    recoveryAction: 'Do not reuse an existing event ID with conflicting payload content. Use a new event ID for distinct events.',
+    remediation: [
+      'Verify that distinct webhook events generate distinct, globally unique event IDs.',
+      'If modifying an existing event payload, assign a new event ID before sending.',
+    ],
+  },
+  WEBHOOK_EVENT_ID_EXPIRED: {
+    code: 'WEBHOOK_EVENT_ID_EXPIRED',
+    category: 'LIFECYCLE',
+    httpStatus: 410,
+    retryable: false,
+    userSafeMessage: 'Webhook event ID record has expired and can no longer be replayed',
+    recoveryAction: 'The retention window for this event ID has expired. Submit new events with fresh event IDs.',
+    remediation: [
+      'Do not resend webhook events older than the 7-day retention TTL window.',
+      'Generate a new event ID if the event must be processed again.',
+    ],
+  },
+
+  // --- Capability tokens (docs/CAPABILITY_TOKENS.md) ---
+  MALFORMED_WEBHOOK: {
+    code: 'MALFORMED_WEBHOOK',
+    category: 'VALIDATION',
+    httpStatus: 400,
+    retryable: false,
+    userSafeMessage: 'Required webhook headers are missing',
+    recoveryAction: 'Send X-Webhook-Signature, X-Webhook-Timestamp and X-Webhook-Event-Id headers.',
+    remediation: [
+      'Add all three webhook headers to the request.',
+      'Resend the event.',
+    ],
+  },
+  STALE_TIMESTAMP: {
+    code: 'STALE_TIMESTAMP',
+    category: 'VALIDATION',
+    httpStatus: 408,
+    retryable: true,
+    userSafeMessage: 'Webhook timestamp is outside the allowed window',
+    recoveryAction: 'Sign the payload again with the current time and retry.',
+    remediation: [
+      'Regenerate X-Webhook-Timestamp with the current epoch seconds.',
+      'Re-sign the body with the fresh timestamp and resend.',
+    ],
+  },
+  INVALID_SIGNATURE: {
+    code: 'INVALID_SIGNATURE',
+    category: 'AUTHORIZATION',
+    httpStatus: 401,
+    retryable: false,
+    userSafeMessage: 'Webhook signature verification failed',
+    recoveryAction: 'Sign the raw body with the shared secret using the documented scheme.',
+    remediation: [
+      'Recompute the signature over the exact raw body with WEBHOOK_SIGNING_SECRET.',
+      'Confirm the header format sha256=<hex>, then resend.',
+    ],
+  },
+  DUPLICATE_EVENT: {
+    code: 'DUPLICATE_EVENT',
+    category: 'LIFECYCLE',
+    httpStatus: 409,
+    retryable: false,
+    userSafeMessage: 'Webhook event has already been processed',
+    recoveryAction: 'This event id was already processed; use a new event id for a new event.',
+    remediation: [
+      'Treat the event as successfully handled.',
+      'Generate a fresh X-Webhook-Event-Id only for genuinely new events.',
+    ],
+  },
+  WEBHOOK_EVENT_ID_INVALID: {
+    code: 'WEBHOOK_EVENT_ID_INVALID',
+    category: 'VALIDATION',
+    httpStatus: 400,
+    retryable: false,
+    userSafeMessage: 'Webhook provider and event ID must be non-empty strings up to 255 characters',
+    recoveryAction: 'Provide a non-empty provider name and an event ID of at most 255 characters.',
+    remediation: [
+      'Ensure the provider name and event ID headers/fields are present and non-empty.',
+      'Truncate or reformat the event ID to stay within 255 characters, then resend.',
+    ],
+  },
+  WEBHOOK_SIGNATURE_INVALID: {
+    code: 'WEBHOOK_SIGNATURE_INVALID',
+    category: 'AUTHORIZATION',
+    httpStatus: 401,
+    retryable: false,
+    userSafeMessage: 'Webhook provider signature verification failed',
+    recoveryAction: 'Verify that the webhook signature matches the shared secret and raw request body.',
+    remediation: [
+      'Check that the webhook signing secret configured on the sender matches the receiver.',
+      'Compute the HMAC signature over the exact unmodified raw payload bytes before sending.',
+    ],
+  },
+  WEBHOOK_DEDUPE_STORE_UNAVAILABLE: {
+    code: 'WEBHOOK_DEDUPE_STORE_UNAVAILABLE',
+    category: 'INTERNAL',
+    httpStatus: 503,
+    retryable: true,
+    userSafeMessage: 'Webhook deduplication store is temporarily unavailable',
+    recoveryAction: 'The idempotency storage layer is unavailable. Retry the delivery with exponential backoff.',
+    remediation: [
+      'Retry the webhook delivery after a short delay (e.g. 1-5 seconds) with backoff.',
+      'Check the health and network connectivity of the underlying persistence or Redis store.',
+    ],
+  },
+  WEBHOOK_EVENT_IN_PROGRESS: {
+    code: 'WEBHOOK_EVENT_IN_PROGRESS',
+    category: 'LIFECYCLE',
+    httpStatus: 409,
+    retryable: true,
+    userSafeMessage: 'Webhook event is currently being processed by another worker',
+    recoveryAction: 'Another worker is currently processing this event. Retry shortly to receive the completed result.',
+    remediation: [
+      'Wait 1-2 seconds and retry with the same event ID to receive the completed response.',
+      'Ensure provider delivery retry intervals allow preceding attempts to finish processing.',
+    ],
+  },
+  WEBHOOK_EVENT_ID_CONFLICT: {
+    code: 'WEBHOOK_EVENT_ID_CONFLICT',
+    category: 'VALIDATION',
+    httpStatus: 422,
+    retryable: false,
+    userSafeMessage: 'Webhook event ID was previously submitted with a different payload',
+    recoveryAction: 'Do not reuse an existing event ID with conflicting payload content. Use a new event ID for distinct events.',
+    remediation: [
+      'Verify that distinct webhook events generate distinct, globally unique event IDs.',
+      'If modifying an existing event payload, assign a new event ID before sending.',
+    ],
+  },
+  WEBHOOK_EVENT_ID_EXPIRED: {
+    code: 'WEBHOOK_EVENT_ID_EXPIRED',
+    category: 'LIFECYCLE',
+    httpStatus: 410,
+    retryable: false,
+    userSafeMessage: 'Webhook event ID record has expired and can no longer be replayed',
+    recoveryAction: 'The retention window for this event ID has expired. Submit new events with fresh event IDs.',
+    remediation: [
+      'Do not resend webhook events older than the 7-day retention TTL window.',
+      'Generate a new event ID if the event must be processed again.',
     ],
   },
 

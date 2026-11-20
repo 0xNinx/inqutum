@@ -2,6 +2,8 @@
 
 Quittance employs optimistic concurrency control (OCC) combined with keyed mutex locking to eliminate race conditions, double processing, and silent data loss across distributed clients, multi-tab sessions, wallet extensions, and automated retries.
 
+To test these guarantees under many seeded, reproducible interleavings, see [CONCURRENCY_HARNESS.md](CONCURRENCY_HARNESS.md).
+
 ---
 
 ## 1. Concurrency Architecture & Guarantees

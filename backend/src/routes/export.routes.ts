@@ -19,6 +19,8 @@ export interface ExportRouterOptions {
   service?: ExportService;
   /** Server-side deadline for generating one export (#288). Defaults to 30 s. */
   timeoutMs?: number;
+  /** Maintenance gate (#254). Defaults to the process status. */
+  publicStatus?: PublicStatusService;
 }
 
 export const DEFAULT_EXPORT_TIMEOUT_MS = 30_000;
@@ -50,7 +52,9 @@ export function createExportRouter(options: ExportRouterOptions): Router {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) throw new Error('timeoutMs must be a positive safe integer');
   const router = Router();
 
-  router.post('/exports', async (req: Request, res: Response) => {
+  const status = options.publicStatus ?? publicStatusService;
+
+  router.post('/exports', status.requireCapability('exports'), async (req: Request, res: Response) => {
     const parsed = requestSchema.safeParse(req.body);
     if (!parsed.success) {
       return sendFailure(res, 400, parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '), {
