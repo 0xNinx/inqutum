@@ -90,6 +90,8 @@ export function verifyEventChain(events: readonly AuditEvent[]): ChainIntegrity 
 export interface ReplayRequest {
   dryRun?: boolean;
   projectorVersion?: number;
+  /** Aborts the run. The live index is never changed by a cancelled run (#424). */
+  signal?: AbortSignal;
 }
 
 export interface ReplayReport {
@@ -121,6 +123,18 @@ export class ReplayInProgressError extends Error {
     super('A projection replay is already running');
     this.name = 'ReplayInProgressError';
   }
+}
+
+/** Thrown when the request's signal aborts. The shadow index is discarded and the live index is untouched. */
+export class ReplayCancelledError extends Error {
+  constructor() {
+    super('The projection replay was cancelled');
+    this.name = 'ReplayCancelledError';
+  }
+}
+
+function throwIfCancelled(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw new ReplayCancelledError();
 }
 
 export class UnknownProjectorVersionError extends Error {
@@ -191,7 +205,7 @@ export class ProjectionReplayService {
     if (this.running) throw new ReplayInProgressError();
     this.running = true;
     try {
-      return await this.run(projector, request.dryRun ?? true);
+      return await this.run(projector, request.dryRun ?? true, request.signal);
     } finally {
       this.running = false;
     }
@@ -206,7 +220,8 @@ export class ProjectionReplayService {
     return { restored };
   }
 
-  private async run(projector: Projector, dryRun: boolean): Promise<ReplayReport> {
+  private async run(projector: Projector, dryRun: boolean, signal?: AbortSignal): Promise<ReplayReport> {
+    throwIfCancelled(signal);
     const startedAt = this.now().toISOString();
     const events = this.options.events();
     const integrity = verifyEventChain(events);
@@ -216,6 +231,7 @@ export class ProjectionReplayService {
     let skipped = 0;
     let rejected = 0;
     for (const event of events) {
+      throwIfCancelled(signal);
       if (!projector.handles.has(event.action)) skipped += 1;
       else if (projector.apply(shadow, event)) applied += 1;
       else rejected += 1;
@@ -235,7 +251,9 @@ export class ProjectionReplayService {
       }
     }
 
+    throwIfCancelled(signal);
     const verification = await this.detector.detect(this.options.storage, shadow);
+    throwIfCancelled(signal);
     const reasons: string[] = [];
     if (!integrity.valid) reasons.push(`audit hash chain is broken at event ${integrity.brokenAt}`);
     if (integrity.truncated) reasons.push('the oldest events were evicted from the audit store, so history is incomplete');
