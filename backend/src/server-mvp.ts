@@ -14,12 +14,14 @@ import { createObservabilityRouter } from './routes/observability.routes';
 import memoryInvoiceStorage from './storage/memory-invoice-storage';
 import { configuredFrontendOrigins, corsOptions } from './config/runtime';
 import { healthHandler, readinessHandler, dependencyHealthHandler } from './health';
+import { publicStatusHandler, publicStatusService } from './ops/public-status';
 import { securityHeaders } from './security/content-safety';
 import { correlationMiddleware } from './observability/telemetry';
 import { buildUserSafeErrorResponse, classifyError } from './errors/error-taxonomy';
 
 import { validateEnvironment } from './config/env-validator';
 import { VERIFICATION_CONTRACT_VERSION } from './services/payment-verification';
+import { strictInputLimitsMiddleware } from './security/input-limits';
 
 // Load environment variables
 dotenv.config();
@@ -42,8 +44,9 @@ app.use(securityHeaders());
 // Middleware
 app.use(cors(corsOptions()));
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '100kb' }));
+app.use(express.urlencoded({ extended: true, limit: '100kb', parameterLimit: 20 }));
+app.use(strictInputLimitsMiddleware());
 
 // Request logging
 app.use((req: Request, res: Response, next: NextFunction) => {
@@ -66,6 +69,7 @@ app.get('/', (req: Request, res: Response) => {
 app.get('/api/health', healthHandler(memoryInvoiceStorage.mode));
 app.get('/api/health/dependencies', dependencyHealthHandler());
 app.get('/api/ready', readinessHandler(memoryInvoiceStorage.mode));
+app.get('/api/status', publicStatusHandler(publicStatusService));
 
 // Invoice, Audit & Observability routes
 app.use('/api', createInvoiceRouter({ storage: memoryInvoiceStorage }));

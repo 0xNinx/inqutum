@@ -151,3 +151,28 @@ test('safeExternalUrl accepts valid https URLs with real hostnames', () => {
   assert.ok(safeExternalUrl('https://sub.domain.co.uk'));
   assert.ok(safeExternalUrl('https://stellar.expert/explorer/public'));
 });
+
+// ── Hardened edge cases (#153) ───────────────────────────────────────────────
+
+test('escapeHtml never throws on exotic inputs and always returns a string', () => {
+  assert.equal(typeof escapeHtml(Symbol('x')), 'string');
+  assert.equal(typeof escapeHtml({}), 'string');
+  assert.equal(typeof escapeHtml([1, 2]), 'string');
+  assert.equal(escapeHtml(undefined), '');
+  assert.equal(escapeHtml(null), '');
+});
+
+test('buildMailtoUrl coerces non-string subject and body to empty instead of leaking coerced junk', () => {
+  assert.equal(
+    buildMailtoUrl('pay@client.example', undefined, null),
+    'mailto:pay@client.example?subject=&body='
+  );
+  assert.equal(
+    buildMailtoUrl('pay@client.example', 42, false),
+    'mailto:pay@client.example?subject=&body='
+  );
+});
+
+test('buildMailtoUrl still rejects an invalid address even when subject/body are non-strings', () => {
+  assert.equal(buildMailtoUrl('not-an-email', undefined, null), null);
+});

@@ -19,7 +19,7 @@ import {
 } from '../utils/asset-helpers';
 import { sanitizePlainText } from '../security/content-safety';
 import { amountsMatch as stroopAmountsMatch } from '../utils/verify-amount-tolerance';
-import { isFeatureEnabled } from '../config/feature-flags';
+import { rolloutGuard } from '../config/rollout-guard';
 
 export const VERIFICATION_CONTRACT_VERSION = '1.0.0';
 
@@ -249,9 +249,11 @@ function transactionForVerification(transaction: HorizonTransactionLike): Horizo
 /**
  * Exact stroop match unless the `paymentAmountTolerance` flag is on, which
  * widens the window to ±1 stroop. Checked server-side on every verification.
+ * `subject` (the seller key) scopes the flag during a guarded rollout (#256);
+ * with no rollout active it has no effect.
  */
-export function amountsMatch(actual: unknown, expected: string | number): boolean {
-  const toleranceStroops = isFeatureEnabled('paymentAmountTolerance') ? 1 : 0;
+export function amountsMatch(actual: unknown, expected: string | number, subject?: string): boolean {
+  const toleranceStroops = rolloutGuard.isEnabledFor('paymentAmountTolerance', subject) ? 1 : 0;
   return stroopAmountsMatch(expected, actual, toleranceStroops);
 }
 
@@ -299,7 +301,7 @@ export function verifyHorizonPayment(input: VerifyPaymentInput): VerificationRes
     (operation) =>
       normalizeDestination(operation.to, operation.to_muxed_id) ===
         normalizeDestination(expected.destination) &&
-      amountsMatch(operation.amount, expected.amount),
+      amountsMatch(operation.amount, expected.amount, expected.destination),
   );
   if (!amountMatch) {
     return failure('AMOUNT_MISMATCH');
@@ -317,7 +319,7 @@ export function verifyHorizonPayment(input: VerifyPaymentInput): VerificationRes
     (operation) =>
       normalizeDestination(operation.to, operation.to_muxed_id) ===
         normalizeDestination(expected.destination) &&
-      amountsMatch(operation.amount, expected.amount) &&
+      amountsMatch(operation.amount, expected.amount, expected.destination) &&
       assetsMatch(
         invoiceAsset,
         resolvePaymentAsset({

@@ -201,5 +201,42 @@ module.exports = {
   formatAmount,
   formatDate,
   getTimeRemaining,
+  clampDecimals,
+  safeInvoiceAmount,
   resolvePayAmountViewModel,
 };
+
+/**
+ * Clamp a numeric amount to the given min/max range, returning the clamped value as a string.
+ *
+ * Time Complexity:  O(1)
+ * Space Complexity: O(1)
+ *
+ * @param {number | string} amount
+ * @param {number} [min]
+ * @param {number} [max]
+ * @returns {string}
+ */
+function clampDecimals(amount, min, max) {
+  const num = typeof amount === 'string' ? parseFloat(amount) : amount;
+  if (!Number.isFinite(num)) return '0';
+  if (typeof min === 'number' && num < min) return min.toFixed(7);
+  if (typeof max === 'number' && num > max) return max.toFixed(7);
+  return num.toFixed(7);
+}
+
+/**
+ * Safely resolve a numeric invoice amount with default fallback.
+ *
+ * Time Complexity:  O(1)
+ * Space Complexity: O(1)
+ *
+ * @param {any} amount
+ * @param {number} [defaultAmount=0]
+ * @returns {number}
+ */
+function safeInvoiceAmount(amount, defaultAmount = 0) {
+  const num = typeof amount === 'number' ? amount : Number(amount);
+  if (!Number.isFinite(num)) return defaultAmount;
+  return Math.max(0, num);
+}

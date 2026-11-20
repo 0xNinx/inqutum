@@ -10,19 +10,23 @@ import {
 } from '@stellar/freighter-api';
 import { detectFreighter } from './freighter-availability';
 import { explorerTransactionUrl } from './safe-content.js';
+import {
+  describeStellarNetworkError,
+  resolveHorizonUrl,
+  resolveNetworkPassphrase,
+} from './stellar-network.js';
+
+// The pure network, URL and error contract lives in stellar-network.js so it is
+// regression-tested directly (issue #154). Re-export the error mapper so the
+// existing '@/lib/stellar' callers keep importing it from this module.
+export { describeStellarNetworkError };
 
 // Network configuration
 const STELLAR_NETWORK = process.env.NEXT_PUBLIC_STELLAR_NETWORK || 'TESTNET';
 const HORIZON_URL =
-  process.env.NEXT_PUBLIC_HORIZON_URL ||
-  (STELLAR_NETWORK === 'TESTNET'
-    ? 'https://horizon-testnet.stellar.org'
-    : 'https://horizon.stellar.org');
+  process.env.NEXT_PUBLIC_HORIZON_URL || resolveHorizonUrl(STELLAR_NETWORK);
 
-export const NETWORK_PASSPHRASE =
-  STELLAR_NETWORK === 'TESTNET'
-    ? StellarSdk.Networks.TESTNET
-    : StellarSdk.Networks.PUBLIC;
+export const NETWORK_PASSPHRASE = resolveNetworkPassphrase(STELLAR_NETWORK);
 
 export const server = new StellarSdk.Horizon.Server(HORIZON_URL);
 
@@ -54,15 +58,8 @@ const isMissingTrustlineError = (error: any): boolean => {
   );
 };
 
-export const describeStellarNetworkError = (error: any): string => {
-  if (error?.message?.includes('Not Found') || error?.response?.status === 404) {
-    return 'Account needs funding on the selected Stellar network.';
-  }
-  if (!error?.response || ['ERR_NETWORK', 'ECONNABORTED', 'ETIMEDOUT'].includes(error?.code)) {
-    return 'Stellar Horizon is temporarily unreachable. Your wallet can stay connected; retry shortly.';
-  }
-  return error?.message || 'Stellar network request failed.';
-};
+// describeStellarNetworkError is imported from ./stellar-network.js and
+// re-exported above; see that module for the regression-tested contract.
 
 import { freighterAdapter } from './freighter-adapter';
 
