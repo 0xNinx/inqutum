@@ -18,7 +18,18 @@ import {
   PolicySimulationPermissionError,
   PolicySimulationValidationError,
 } from '../domain/policy-simulation';
+import {
+  runPolicySimulationPreview,
+  parsePolicySimulationPreviewRequest,
+  PolicyPreviewError,
+} from '../domain/policy-simulation-preview';
 import { evaluatePolicyDryRun, parsePolicyDryRunRequest, PolicyDryRunError } from '../domain/policy-dry-run';
+import {
+  SecurityEventInvalidator,
+  createSecurityEventInvalidator,
+  SecurityEventInvalidationError,
+  type SecurityEventInvalidationInput,
+} from '../security/security-event-invalidator';
 import { loadPolicy } from '../domain/policy';
 import {
   TrendExportService,
@@ -119,6 +130,18 @@ export interface OpsRouterOptions {
   ledger?: EventLedger;
   /** Feature rollout guardrails (#309). Defaults to the process controller. */
   rollout?: FeatureRolloutController;
+  /**
+   * Secret used to sign pagination cursors for the policy simulation preview
+   * endpoint (#432). When unset (or shorter than 32 characters), cursor-based
+   * paging is disabled and only the first page is returned. Treat as a secret.
+   */
+  policyPreviewCursorSecret?: string;
+  /**
+   * Security-event session invalidator (#433). Defaults to one wired to the
+   * process impersonation service, capability service, and audit store.
+   * Pass null to disable the invalidation route (403).
+   */
+  securityInvalidator?: SecurityEventInvalidator | null;
 }
 
 function defaultApprovals(): MaintainerApprovalService | null {
@@ -165,6 +188,21 @@ export function createOpsRouter(options: OpsRouterOptions): Router {
   const approvals = options.approvals === undefined ? defaultApprovals() : options.approvals;
   const retries = options.jobs ? new PartialFailureRetryCoordinator(options.jobs) : null;
   const capabilities = options.capabilities === undefined ? capabilityServiceFromEnv() : options.capabilities;
+  // Security-event session invalidator (#433). Defaults to a process-wide
+  // instance wired to the live impersonation/capability/audit singletons.
+  // Pass null explicitly to disable the invalidation route.
+  const securityInvalidator =
+    options.securityInvalidator === undefined
+      ? createSecurityEventInvalidator(impersonation, capabilities, auditStore)
+      : options.securityInvalidator;
+  // Cursor secret for the policy simulation preview (#432). Pulled from
+  // options, falling back to the capability secret (already validated for
+  // length) so a configured deployment gets paging for free.
+  const policyPreviewCursorSecret =
+    options.policyPreviewCursorSecret ??
+    (process.env.POLICY_PREVIEW_CURSOR_SECRET && process.env.POLICY_PREVIEW_CURSOR_SECRET.length >= 32
+      ? process.env.POLICY_PREVIEW_CURSOR_SECRET
+      : undefined);
   const config = options.adminConfig ?? adminConfig;
   const replay =
     options.replay ??
@@ -1320,6 +1358,96 @@ export function createOpsRouter(options: OpsRouterOptions): Router {
       if (err instanceof UnauthorizedRecoveryCheckError) {
         return fail(res, req, err.httpStatus, err.code, err.message);
       }
+      next(err);
+    }
+  });
+
+  // -- Paginated affected-record preview for policy simulations (#432) ------
+  //
+  // Runs the full maintainer simulation against live records, a named
+  // fixture, or a caller-supplied selection, and returns ONE bounded page of
+  // affected records plus the full risk/workflow/seller summary. The opaque
+  // `nextCursor` is HMAC-signed against (proposal digest, dataset digest) so
+  // it cannot page a different proposal or survive an in-flight data change.
+
+  router.post('/ops/policy/simulate/preview', admin, async (req, res, next) => {
+    try {
+      const parsed = parsePolicySimulationPreviewRequest(req.body, loadPolicy());
+      const invoices =
+        parsed.fixtureName || !options.storage.getAllInvoices
+          ? []
+          : await options.storage.getAllInvoices();
+      const workflows = options.jobs ? (await options.jobs.list({ limit: 1000 })).jobs : [];
+      const page = runPolicySimulationPreview(
+        {
+          ...parsed,
+          invoices,
+          workflows,
+        },
+        policyPreviewCursorSecret,
+      );
+      return res.json({ success: true, data: page, correlationId: req.correlationId });
+    } catch (err) {
+      if (err instanceof PolicyPreviewError) {
+        return fail(res, req, err.httpStatus, err.code, err.message);
+      }
+      if (err instanceof PolicySimulationPermissionError || err instanceof PolicySimulationValidationError) {
+        const explanation = explainRejection(err, { correlationId: req.correlationId });
+        return res.status(err.httpStatus).json({
+          success: false,
+          code: err.code,
+          error: err.message,
+          explanation,
+          correlationId: req.correlationId,
+        });
+      }
+      next(err);
+    }
+  });
+
+  // -- Security-event session invalidation (#433) ---------------------------
+  //
+  // Terminates every active impersonation session and revokes every live
+  // capability token for a subject in one atomic call, writing a single
+  // audit event with the full invalidation manifest. The route is admin-only
+  // and fails closed (403) when the invalidator is not configured.
+
+  router.post('/ops/security/invalidate-sessions', admin, (req, res, next) => {
+    if (!securityInvalidator) {
+      return fail(res, req, 403, 'SECURITY_INVALIDATION_DISABLED', 'Security-event session invalidation is not configured');
+    }
+    try {
+      const body = req.body ?? {};
+      const input: SecurityEventInvalidationInput = {
+        subjectId: String(body.subjectId ?? ''),
+        kind: body.kind,
+        reason: String(body.reason ?? ''),
+        triggeredBy: String(body.triggeredBy ?? 'ops-admin'),
+        correlationId: req.correlationId,
+        ip: req.ip,
+        userAgent: req.get('user-agent'),
+      };
+      const result = securityInvalidator.invalidate(input);
+      return res.status(200).json({ success: true, data: result, correlationId: req.correlationId });
+    } catch (err) {
+      if (err instanceof SecurityEventInvalidationError) {
+        return fail(res, req, err.httpStatus, err.code, err.message);
+      }
+      next(err);
+    }
+  });
+
+  router.get('/ops/security/invalidate-sessions/status', admin, (req, res, next) => {
+    if (!securityInvalidator) {
+      return fail(res, req, 403, 'SECURITY_INVALIDATION_DISABLED', 'Security-event session invalidation is not configured');
+    }
+    try {
+      const subjectId = String(req.query?.subjectId ?? '');
+      if (!subjectId) {
+        return fail(res, req, 400, 'INVALID_STATUS_REQUEST', 'subjectId query parameter is required');
+      }
+      return res.json({ success: true, data: securityInvalidator.status(subjectId), correlationId: req.correlationId });
+    } catch (err) {
       next(err);
     }
   });
