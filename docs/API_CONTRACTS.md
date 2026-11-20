@@ -170,7 +170,7 @@ cursor. These semantics are pinned by
 | `GET` | `/api/notifications/preferences` | none | 200, 400 | Retrieve durable notification routing preferences for a recipient. |
 | `PUT` | `/api/notifications/preferences` | none | 200, 400 | Update durable notification routing preferences for a recipient. |
 | `GET` | `/api/notifications/routing-audit` | none | 200, 400 | Retrieve routing and override audit trail for a recipient. |
-| `POST` | `/api/exports` | none | 201, 400, 403, 500, 503 | Generate an export artifact. Returns an expiring download handle. |
+| `POST` | `/api/exports` | none | 201, 400, 403, 409, 500, 503 | Generate an export artifact. Returns an expiring download handle. Optional `fields` selection (field-level authorization, 403 `EXPORT_FIELD_FORBIDDEN`) and `Idempotency-Key` (409 on reuse for a different request). See [EXPORTS.md](EXPORTS.md). |
 | `GET` | `/api/exports/:id` | none | 200, 400, 404, 410 | Download an export artifact. 410 once it has expired. |
 | `GET` | `/api/stellar/account` | none | 200 | Account balances from Horizon. |
 | `GET` | `/api/stellar/payments` | none | 200 | Recent payments for an account from Horizon. |
@@ -216,6 +216,16 @@ cursor. These semantics are pinned by
 | `POST` | `/api/ops/capabilities` | `admin` | 201, 400, 401, 403 | Issue an expiring, single-use capability token for one sensitive action on one target. |
 | `GET` | `/api/ops/config` | `admin` | 200, 401, 403 | Effective runtime configuration, its version and the source of each value. |
 | `PUT` | `/api/ops/config/feature-flags/:flag` | `admin` + capability | 200, 400, 401, 403, 404, 409, 503 | Set or clear a feature-flag override. Writes audit evidence first. |
+| `GET` | `/api/ops/ledger` | `admin` | 200, 401, 403 | Tamper-evident ledger status: head, anchor, compromised flag and deferred events. See [EVENT_LEDGER.md](EVENT_LEDGER.md). |
+| `GET` | `/api/ops/ledger/verify` | `admin` | 200, 401, 403, 409 | Verify the ledger hash chain. 409 marks it compromised and refuses appends. |
+| `GET` | `/api/ops/ledger/export` | `admin` | 200, 400, 401, 403 | Export ledger entries (`json` or `ndjson`) with anchor and head for offline verification. Raw document. |
+| `POST` | `/api/ops/ledger/prune` | `admin` | 200, 400, 401, 403, 409, 503 | Drop archived entries up to `throughSequence`; needs the `confirmHash` of that entry. |
+| `POST` | `/api/ops/ledger/reseal` | `admin` | 200, 400, 401, 403, 409 | Reseal a compromised ledger with a `LEDGER_RESEALED` entry, then backfill deferred events. |
+| `GET` | `/api/ops/rollouts` | `admin` | 200, 401, 403 | Rollout state, kill switches, health and guardrails for every feature flag. See [FEATURE_ROLLOUT.md](FEATURE_ROLLOUT.md). |
+| `PUT` | `/api/ops/rollouts/:flag` | `admin` + capability | 200, 400, 401, 403, 404, 409, 422, 503 | Ramp a rollout percentage within the guardrails. Writes audit evidence first. |
+| `POST` | `/api/ops/rollouts/:flag/emergency-disable` | `admin` | 200, 400, 401, 403, 404 | Engage the kill switch: the flag falls back to its safe default. Idempotent; no capability, so it is never delayed. |
+| `DELETE` | `/api/ops/rollouts/:flag/kill-switch` | `admin` + capability | 200, 400, 401, 403, 404, 409, 503 | Clear the kill switch and restart the rollout at 0%. |
+| `POST` | `/api/ops/rollouts/evidence/flush` | `admin` | 200, 401, 403, 503 | Retry audit evidence queued by an emergency disable during an audit outage. |
 | `GET` | `/api/ops/dependencies/matrix` | `admin` | 200, 401, 403 | External dependency degradation matrix and its validation problems. |
 | `GET` | `/api/ops/dependencies` | `admin` | 200, 401, 403, 503 | Probe every external dependency. 503 when the overall state is down. |
 | `GET` | `/api/ops/partial-failures` | `admin` | 200, 400, 401, 403 | Partial-failure dashboard over background jobs, filterable. |

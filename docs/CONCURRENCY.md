@@ -152,3 +152,54 @@ node --import tsx --test tests/concurrency.test.ts
 # Run deterministic replay simulation tests
 node --import tsx --test tests/deterministic-replay.test.ts
 ```
+
+---
+
+## 7. Stress Tests for Critical Mutation Paths (#208)
+
+`backend/tests/concurrency-stress.test.ts` drives the real invoice handlers with
+high concurrency through a **seeded scheduler**. Every storage call, audit write
+and Horizon lookup yields a pseudo-random number of event-loop turns, so each
+seed produces a different but replayable interleaving.
+
+```bash
+cd backend
+node --import tsx --test tests/concurrency-stress.test.ts                 # 5 seeds from 208
+STRESS_ROUNDS=50 node --import tsx --test tests/concurrency-stress.test.ts
+STRESS_SEED=1234 STRESS_ROUNDS=1 node --import tsx --test tests/concurrency-stress.test.ts   # replay one seed
+```
+
+### Mutation paths and the strategy that protects each
+
+| Path | Hazard | Strategy | Stress test |
+| --- | --- | --- | --- |
+| `POST /invoices` | Duplicate id or memo | UUID ids, memo uniqueness check | 60 concurrent creates: unique ids and memos |
+| `POST /invoices/:id/verify` (duplicates) | Double settlement, double side effects | `InvoiceLockManager` per invoice, plus the status check inside the lock, plus the conditional `UPDATE … WHERE status = 'PENDING'` | 50 duplicate verifies: one 200, 49 `INVOICE_ALREADY_PAID`, one Horizon call, one `PAYMENT_VERIFIED` audit event and ledger entry |
+| verify racing cancel | PAID and CANCELLED both applied | Conditional update on `status = 'PENDING'` (+ `version`). Cancel does **not** take the lock; the storage-level condition settles the race. | Exactly one wins. A cancelled invoice never carries a tx hash. The seeded head start makes both outcomes occur, and a coverage test fails if one never does. |
+| One tx hash on several invoices | One payment settles two invoices | Memo match plus the unique `payment_tx_hash` | 8 invoices raced on one hash: at most one settled |
+| Concurrent cancels | Lost update | `expectedVersion` (OCC) | 10 cancels at version 1: one 200, the rest 409/400, one audit event |
+| Export with `Idempotency-Key` | Duplicate artifacts and quota eviction | In-flight generation shared per key | 20 concurrent retries: one artifact |
+| Rollout changes | Double apply | Synchronous transitions plus `requestId` replay | `feature-rollout.test.ts`: 25 concurrent retries, one applied |
+| Ledger append | Gaps or forks in the chain | Synchronous hash-and-push (no `await`) | 60 settlements + 60 creates under interleaving: gap-free, verifying chain |
+
+### Lock timeouts
+
+`InvoiceLockManager.acquire(id, { timeoutMs })` and `withLock(id, fn, { timeoutMs })`
+reject with `LockTimeoutError` (`code: LOCK_TIMEOUT`) instead of waiting
+forever behind a stuck holder (for example a hung Horizon request).
+
+- A waiter that times out **never** acquires the lock afterwards. Its critical
+  section does not run behind the client's back after "try again" was returned.
+- A timeout never steals or releases the holder's lock.
+- `timeoutMs: 0` is a try-lock. Negative, `NaN` or infinite values get `RangeError`.
+- `withLock` releases on throw.
+- Omitting `timeoutMs` keeps the previous unbounded wait. `verifyPayment` still
+  uses the unbounded form. Adopting a timeout there needs a new retryable
+  response code, so it is left as a follow-up.
+
+### Limits
+
+These are single-process guarantees. Multiple API instances share only
+Postgres, so there the conditional `UPDATE` and the unique constraints are the
+real guard, and the in-process lock only saves redundant Horizon calls.
+

@@ -1053,6 +1053,42 @@ export const DOMAIN_ERROR_TAXONOMY: Record<string, DomainErrorDefinition> = {
       'Retry with the narrower filters.',
     ],
   },
+  INVALID_EXPORT_FIELDS: {
+    code: 'INVALID_EXPORT_FIELDS',
+    category: 'VALIDATION',
+    httpStatus: 400,
+    retryable: false,
+    userSafeMessage: 'The export field selection is invalid',
+    recoveryAction: 'Request only field names listed in docs/EXPORTS.md.',
+    remediation: [
+      'Remove unknown field names from the fields list.',
+      'Send between 1 and 32 field names, or omit fields for the default set.',
+    ],
+  },
+  EXPORT_FIELD_FORBIDDEN: {
+    code: 'EXPORT_FIELD_FORBIDDEN',
+    category: 'AUTHORIZATION',
+    httpStatus: 403,
+    retryable: false,
+    userSafeMessage: 'You are not authorized to export some of the requested fields',
+    recoveryAction: 'Drop the fields listed in deniedFields and request the export again.',
+    remediation: [
+      'Personal fields (names, emails) are never exportable.',
+      'Counterparty fields need a grant the public export route does not give.',
+    ],
+  },
+  EXPORT_IDEMPOTENCY_CONFLICT: {
+    code: 'EXPORT_IDEMPOTENCY_CONFLICT',
+    category: 'VALIDATION',
+    httpStatus: 409,
+    retryable: false,
+    userSafeMessage: 'This idempotency key was already used for a different export',
+    recoveryAction: 'Use a new Idempotency-Key for a different export request.',
+    remediation: [
+      'Reuse a key only to retry the exact same export request.',
+      'Generate a fresh key when changing format, filters or fields.',
+    ],
+  },
   INVALID_EXPORT_REQUEST: {
     code: 'INVALID_EXPORT_REQUEST',
     category: 'VALIDATION',

@@ -20,8 +20,9 @@ and switched off without shipping code. Definitions live in
   token and is audited (see [ADMIN_CONFIG_AUDIT.md](ADMIN_CONFIG_AUDIT.md)). It
   is process-local and lost on restart. The environment stays the durable value.
 - `GET /api/health` reports the effective state under `features`.
-- For a scoped, monitored rollout with automatic rollback and verification,
-  use the rollout guard ([FEATURE_FLAG_ROLLOUT_GUARD.md](FEATURE_FLAG_ROLLOUT_GUARD.md)).
+- Staged percentage rollouts, automatic guardrails and the emergency kill
+  switch are described in [FEATURE_ROLLOUT.md](FEATURE_ROLLOUT.md). An engaged
+  kill switch beats every other source, including runtime overrides.
 - When a rollout is finished, delete the flag and the losing code path.
 
 ## Flags

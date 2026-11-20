@@ -80,10 +80,9 @@ import {
   type RepairPhase,
 } from '../ops/resumable-repair.service';
 import { pool } from '../config/database';
-import { PublicStatusError, PublicStatusService, publicStatusService } from '../ops/public-status';
-import { RolloutGuard, RolloutGuardError, rolloutGuard } from '../config/rollout-guard';
-import type { FeatureFlag } from '../config/feature-flags';
-import { ReconciliationError, ReconciliationService } from '../ops/reconciliation';
+import { EventLedger, eventLedger } from '../audit/event-ledger';
+import { FeatureRolloutController, featureRollout } from '../config/feature-rollout';
+import { registerGovernanceRoutes } from './governance.routes';
 
 export interface OpsRouterOptions {
   storage: InvoiceStorage;
@@ -116,14 +115,10 @@ export interface OpsRouterOptions {
   externalReferences?: ExternalReferenceVerificationService;
   /** Custom external reference probe for verification routes. */
   externalReferenceProbe?: ExternalReferenceProbe;
-  /** Dependency degradation state. Defaults to the process instance. */
-  degradedMode?: DegradedModeService;
-  /** Public status (#254). Defaults to the process instance. */
-  publicStatus?: PublicStatusService;
-  /** Feature-flag rollout guard (#256). Defaults to the process instance. */
-  rollouts?: RolloutGuard;
-  /** Projection reconciliation (#255). Defaults to one over `storage` and the live search index. */
-  reconciliation?: ReconciliationService;
+  /** Tamper-evident event ledger (#250). Defaults to the process ledger. */
+  ledger?: EventLedger;
+  /** Feature rollout guardrails (#309). Defaults to the process controller. */
+  rollout?: FeatureRolloutController;
 }
 
 function defaultApprovals(): MaintainerApprovalService | null {
@@ -766,6 +761,14 @@ export function createOpsRouter(options: OpsRouterOptions): Router {
     } catch (err) {
       knownError(req, res, err, next);
     }
+  });
+
+  registerGovernanceRoutes(router, {
+    admin,
+    needCapabilities,
+    capabilities,
+    ledger: options.ledger ?? eventLedger,
+    rollout: options.rollout ?? featureRollout,
   });
 
   // Stale projection detection and repair recommendations (Issue #269)
