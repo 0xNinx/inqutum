@@ -235,6 +235,32 @@ export class ImpersonationService {
   }
 
   /**
+   * Closes a session as a result of a security event (#433). Unlike
+   * {@link endSession} this stamps `endReason = 'security_event'` and audits
+   * the closure as `IMPERSONATION_REVOKED` so the security trail is
+   * distinguishable from a manual end. Returns false when the session is
+   * unknown or already closed (idempotent).
+   */
+  endSessionForSecurityEvent(sessionId: string): boolean {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.endedAt) return false;
+
+    session.endedAt = new Date(this.now()).toISOString();
+    session.endReason = 'security_event';
+
+    this.audit.recordEvent({
+      action: 'IMPERSONATION_REVOKED',
+      actor: { type: 'maintainer', id: session.maintainerId },
+      scope: { entityType: 'system', entityId: session.id },
+      reason: 'Session revoked due to a security event',
+      afterState: { endedAt: session.endedAt, endReason: 'security_event' },
+      metadata: { impersonatedId: session.targetId },
+    });
+
+    return true;
+  }
+
+  /**
    * Decides whether an action is allowed inside an active session. Denials are
    * audited too — a maintainer repeatedly attempting blocked actions is exactly
    * the signal a support lead wants to see.
