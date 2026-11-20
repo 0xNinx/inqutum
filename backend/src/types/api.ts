@@ -6,6 +6,21 @@ import {
   classifyError,
 } from '../errors/error-taxonomy';
 import { redactErrorMessage } from '../security/redaction';
+import {
+  PROBLEM_CONTENT_TYPE,
+  toProblemDetails,
+  sendProblemDetails,
+  problemTypeUri,
+  type ProblemDetails,
+} from '../errors/problem-details';
+
+export {
+  PROBLEM_CONTENT_TYPE,
+  toProblemDetails,
+  sendProblemDetails,
+  problemTypeUri,
+  type ProblemDetails,
+};
 
 // Shared response envelope used by both the MVP and the Postgres server.
 // Both servers send the same success/failure shape so clients stay
@@ -127,19 +142,20 @@ export function sendFailure(
         ? error.message
         : classified.userSafeMessage);
 
-    res.status(status || classified.httpStatus).json(
-      apiFailure(message, {
-        code: classified.code,
-        category: classified.category,
-        retryable: classified.retryable,
-        recoveryAction: classified.recoveryAction,
-        correlationId: corrId,
-      })
-    );
+    const body = apiFailure(message, {
+      code: classified.code,
+      category: classified.category,
+      retryable: classified.retryable,
+      recoveryAction: classified.recoveryAction,
+      correlationId: corrId,
+    });
+    // RFC 7807: failures use application/problem+json
+    sendProblemDetails(res, status || classified.httpStatus, body);
     return;
   }
 
-  res.status(status).json(apiFailure(error, { ...extra, correlationId: corrId }));
+  const body = apiFailure(error, { ...extra, correlationId: corrId });
+  sendProblemDetails(res, status, body);
 }
 
 export function sendVerificationFailure(
@@ -152,8 +168,8 @@ export function sendVerificationFailure(
   const corrId = correlationId || (res.req as any)?.correlationId;
   const taxonomy = DOMAIN_ERROR_TAXONOMY[code];
 
-  res.status(status).json({
-    success: false,
+  const body = {
+    success: false as const,
     code,
     error: redactErrorMessage(error),
     ...(taxonomy
@@ -166,7 +182,10 @@ export function sendVerificationFailure(
       : {}),
     ...(corrId ? { correlationId: corrId } : {}),
     timestamp: new Date().toISOString(),
-  });
+  };
+
+  // RFC 7807: set application/problem+json and include full ProblemDetails fields
+  sendProblemDetails(res, status, body);
 }
 
 export default {
