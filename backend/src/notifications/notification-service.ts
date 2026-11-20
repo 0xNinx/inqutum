@@ -23,6 +23,12 @@ import {
   type RecipientNotificationPreferences,
   type RoutingAuditRecord,
 } from './notification-preference';
+import {
+  deliveryReceiptStore,
+  type DeliveryReceipt,
+  type DeliveryReceiptStore,
+  type ReceiptFilter,
+} from './delivery-receipt';
 
 export type NotificationType =
   | 'invoice.paid'
@@ -172,12 +178,19 @@ export class NotificationService {
   constructor(
     private readonly store = new MemoryNotificationStore(),
     private readonly now: () => Date = () => new Date(),
-    private readonly preferenceStore: NotificationPreferenceStore = new MemoryNotificationPreferenceStore()
+    private readonly preferenceStore: NotificationPreferenceStore = new MemoryNotificationPreferenceStore(),
+    private readonly receiptStore: DeliveryReceiptStore = deliveryReceiptStore
   ) {}
 
   private emit(
     input: Pick<Notification, 'recipient' | 'type' | 'severity' | 'title' | 'message' | 'entityId' | 'data'> & { dedupKey: string }
-  ): { notification: Notification | null; created: boolean; suppressed?: boolean; routingReason?: string } {
+  ): {
+    notification: Notification | null;
+    created: boolean;
+    suppressed?: boolean;
+    routingReason?: string;
+    receipt?: DeliveryReceipt;
+  } {
     const id = uuidv4();
     const prefs = this.preferenceStore.getPreferences(input.recipient);
     const evaluation = evaluateNotificationRouting(
@@ -223,19 +236,41 @@ export class NotificationService {
       readAt: null,
     });
 
+    // Record verifiable delivery receipt with deduplication tracking
+    const { receipt } = this.receiptStore.recordReceipt({
+      notificationId: inserted.notification.id,
+      dedupKey: input.dedupKey,
+      recipient: input.recipient,
+      channel: 'in_app',
+      status: inserted.created ? 'delivered' : 'duplicate_suppressed',
+      metadata: {
+        type: input.type,
+        entityId: input.entityId,
+        routingReason: evaluation.reason,
+      },
+      now: this.now(),
+    });
+
     return {
       notification: inserted.notification,
       created: inserted.created,
       suppressed: false,
       routingReason: evaluation.reason,
+      receipt,
     };
   }
 
   /**
-   * Emits the notification implied by the invoice's current status, if any.
-   * Safe to call on every read or retry: each event is created at most once.
+   * Emits the notification implied by the invoice's current status along with its delivery receipt.
+   * Safe to call on every read or retry: each event is created and receipted at most once.
    */
-  syncInvoiceNotifications(invoice: StoredInvoice): Notification | null {
+  syncInvoiceNotificationsWithReceipt(invoice: StoredInvoice): {
+    notification: Notification | null;
+    receipt?: DeliveryReceipt;
+    created?: boolean;
+    suppressed?: boolean;
+    routingReason?: string;
+  } {
     const facts = {
       invoiceId: invoice.id,
       amount: invoice.amount,
@@ -247,20 +282,31 @@ export class NotificationService {
 
     switch (invoice.status) {
       case 'PAID':
-        return this.emit({ ...base, type: 'invoice.paid', severity: 'success', dedupKey: `${invoice.id}:invoice.paid`, title: 'Invoice paid', message: `Payment of ${label} was verified for invoice ${invoice.memo}.` }).notification;
+        return this.emit({ ...base, type: 'invoice.paid', severity: 'success', dedupKey: `${invoice.id}:invoice.paid`, title: 'Invoice paid', message: `Payment of ${label} was verified for invoice ${invoice.memo}.` });
       case 'EXPIRED':
-        return this.emit({ ...base, type: 'invoice.expired', severity: 'warning', dedupKey: `${invoice.id}:invoice.expired`, title: 'Invoice expired', message: `Invoice ${invoice.memo} (${label}) expired unpaid. Create a new invoice to collect payment.` }).notification;
+        return this.emit({ ...base, type: 'invoice.expired', severity: 'warning', dedupKey: `${invoice.id}:invoice.expired`, title: 'Invoice expired', message: `Invoice ${invoice.memo} (${label}) expired unpaid. Create a new invoice to collect payment.` });
       case 'CANCELLED':
-        return this.emit({ ...base, type: 'invoice.cancelled', severity: 'info', dedupKey: `${invoice.id}:invoice.cancelled`, title: 'Invoice cancelled', message: `Invoice ${invoice.memo} (${label}) was cancelled.` }).notification;
+        return this.emit({ ...base, type: 'invoice.cancelled', severity: 'info', dedupKey: `${invoice.id}:invoice.cancelled`, title: 'Invoice cancelled', message: `Invoice ${invoice.memo} (${label}) was cancelled.` });
       default:
-        return null;
+        return { notification: null, created: false };
     }
   }
 
+  /**
+   * Emits the notification implied by the invoice's current status, if any.
+   * Safe to call on every read or retry: each event is created at most once.
+   */
+  syncInvoiceNotifications(invoice: StoredInvoice): Notification | null {
+    return this.syncInvoiceNotificationsWithReceipt(invoice).notification;
+  }
+
   /** Recovery notification for a payment attempt the seller may need to resolve. */
-  notifyPaymentRejected(invoice: StoredInvoice, code: VerificationCode, txHash: string): Notification | null {
-    if (!RECOVERABLE_REJECTIONS.has(code)) return null;
-    return this.emit({
+  notifyPaymentRejectedWithReceipt(invoice: StoredInvoice, code: VerificationCode, txHash: string): {
+    notification: Notification | null;
+    receipt?: DeliveryReceipt;
+  } {
+    if (!RECOVERABLE_REJECTIONS.has(code)) return { notification: null };
+    const emitted = this.emit({
       recipient: invoice.sellerPublicKey,
       entityId: invoice.id,
       type: 'payment.rejected',
@@ -269,7 +315,13 @@ export class NotificationService {
       title: 'Payment needs attention',
       message: REJECTION_ADVICE[code] ?? 'A payment attempt for this invoice was rejected.',
       data: { invoiceId: invoice.id, memo: invoice.memo, code, txHash },
-    }).notification;
+    });
+    return { notification: emitted.notification, receipt: emitted.receipt };
+  }
+
+  /** Recovery notification for a payment attempt the seller may need to resolve. */
+  notifyPaymentRejected(invoice: StoredInvoice, code: VerificationCode, txHash: string): Notification | null {
+    return this.notifyPaymentRejectedWithReceipt(invoice, code, txHash).notification;
   }
 
   /** Optional notification: Payment reminder for an open invoice */
@@ -366,9 +418,27 @@ export class NotificationService {
     return changed;
   }
 
+  getReceipt(receiptId: string, recipient?: string): DeliveryReceipt | undefined {
+    return this.receiptStore.getReceipt(receiptId, recipient);
+  }
+
+  getReceiptByDedupKey(recipient: string, dedupKey: string): DeliveryReceipt | undefined {
+    return this.receiptStore.getReceiptByDedupKey(recipient, dedupKey);
+  }
+
+  listReceipts(recipient: string, filter?: ReceiptFilter): { receipts: DeliveryReceipt[]; total: number } {
+    return this.receiptStore.listForRecipient(recipient, filter);
+  }
+
+  acknowledgeReceipt(recipient: string, receiptId: string): DeliveryReceipt | null {
+    return this.receiptStore.acknowledgeReceipt(recipient, receiptId, this.now());
+  }
+
   clear(): void {
     this.store.clear();
     this.preferenceStore.clear();
+    this.receiptStore.clear();
+  }
   }
 }
 
