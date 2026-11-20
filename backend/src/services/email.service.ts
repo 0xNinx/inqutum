@@ -94,8 +94,17 @@ export class EmailService {
     private readonly transport: EmailTransport = new MemoryEmailTransport(),
     private readonly defaultSender = 'noreply@quittance.app',
     /** Recovery checkpoints for keyed sends (#289). */
-    private readonly checkpoints: CheckpointStore = new MemoryCheckpointStore()
+    private checkpoints: CheckpointStore = new MemoryCheckpointStore()
   ) {}
+
+  /**
+   * Swaps the checkpoint store. The process-local default loses its records on
+   * restart, so the server switches to a durable store once the database pool
+   * exists (#425).
+   */
+  useCheckpointStore(store: CheckpointStore): void {
+    this.checkpoints = store;
+  }
 
   /**
    * Prepares template data dictionary from invoice record.
