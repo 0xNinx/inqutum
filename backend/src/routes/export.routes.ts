@@ -26,6 +26,9 @@ export interface ExportRouterOptions {
 
 export const DEFAULT_EXPORT_TIMEOUT_MS = 30_000;
 
+/** Header that carries the requester on GET /exports/:id (#444). Lower-case, as Node exposes it. */
+export const REQUESTER_HEADER = 'x-requester' as const;
+
 const requestSchema = z.object({
   requester: stellarPublicKeySchema,
   /** Optional explicit scope. Must equal `requester`; anything else is denied. */
@@ -114,7 +117,11 @@ export function createExportRouter(options: ExportRouterOptions): Router {
       sendSuccess(res, 201, {
         ...artifact.meta,
         format,
+        // downloadPath keeps the legacy query form for existing clients.
         downloadPath: `/api/exports/${artifact.meta.exportId}?requester=${requester}`,
+        // Preferred form (#444): fetch downloadPath without the query and send this header.
+        downloadPathNoQuery: `/api/exports/${artifact.meta.exportId}`,
+        downloadHeaders: { 'X-Requester': requester },
       });
     } catch (error) {
       if (error instanceof ExportForbiddenError) {
@@ -150,9 +157,27 @@ export function createExportRouter(options: ExportRouterOptions): Router {
   });
 
   router.get('/exports/:id', (req: Request, res: Response) => {
-    const requester = stellarPublicKeySchema.safeParse(req.query.requester);
+    // Preferred: `X-Requester` header, so the wallet key stays out of URLs,
+    // proxy logs and browser history (#444). `?requester=` is still accepted
+    // for existing clients. Sending both with different values is refused.
+    const headerValue = req.headers[REQUESTER_HEADER];
+    const queryValue = req.query.requester;
+    if (headerValue !== undefined && typeof headerValue !== 'string') {
+      return sendFailure(res, 400, `${REQUESTER_HEADER} must be a single valid Stellar public key`, {
+        code: 'REQUESTER_REQUIRED',
+        correlationId: req.correlationId,
+      });
+    }
+    if (headerValue !== undefined && queryValue !== undefined && headerValue !== queryValue) {
+      return sendFailure(res, 400, 'requester in the header and the query string differ', {
+        code: 'REQUESTER_MISMATCH',
+        correlationId: req.correlationId,
+      });
+    }
+
+    const requester = stellarPublicKeySchema.safeParse(headerValue ?? queryValue);
     if (!requester.success) {
-      return sendFailure(res, 400, 'requester must be a valid Stellar public key', {
+      return sendFailure(res, 400, `requester must be a valid Stellar public key (send it in the ${REQUESTER_HEADER} header)`, {
         code: 'REQUESTER_REQUIRED',
         correlationId: req.correlationId,
       });

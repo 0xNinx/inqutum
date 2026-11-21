@@ -7,6 +7,11 @@
  *   X-Webhook-Event-Id   — unique event identifier
  *
  * On failure the middleware short-circuits with a structured JSON error.
+ *
+ * Ordering matters for dedupe (#430): an event ID is reserved only after the
+ * timestamp and signature checks pass, so unauthenticated or stale requests can
+ * never block the real event. If the downstream handler fails it must call
+ * `req.releaseWebhookEvent()` so the redelivery is not rejected as a duplicate.
  */
 
 import type { Request, Response, NextFunction, RequestHandler } from 'express';
@@ -66,6 +71,9 @@ export function createWebhookMiddleware(
 
     store.add(eventId);
     req.webhookEventId = eventId;
+    req.releaseWebhookEvent = () => {
+      store.release?.(eventId);
+    };
     next();
   };
 }

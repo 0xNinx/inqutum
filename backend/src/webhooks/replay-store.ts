@@ -6,11 +6,17 @@ import { createHmac, timingSafeEqual } from 'crypto';
  * Stores processed event IDs in a bounded in-memory map with TTL-based
  * eviction. Events older than the replay window are automatically removed.
  * Supports signed webhook timestamp enforcement for replay-window validation.
+ *
+ * Recovery (#430): `release` forgets an event ID so a provider redelivery is
+ * processed again after the handler failed. It is optional on the interface so
+ * existing ReplayStore implementations keep compiling.
  */
 
 export interface ReplayStore {
   has(eventId: string): boolean;
   add(eventId: string): void;
+  /** Forget an event ID whose handling failed, so a redelivery is accepted. Idempotent. */
+  release?(eventId: string): void;
   cleanup(): void;
   isTimestampWithinWindow(timestamp: string, toleranceSeconds?: number): boolean;
   validateSignedWindow(eventId: string, timestamp: string, signature: string, secret: string, toleranceSeconds?: number): boolean;
@@ -41,6 +47,10 @@ export class MemoryReplayStore implements ReplayStore {
     }
 
     this.entries.set(eventId, Date.now());
+  }
+
+  release(eventId: string): void {
+    this.entries.delete(eventId);
   }
 
   cleanup(): void {
