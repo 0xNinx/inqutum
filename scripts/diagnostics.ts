@@ -331,6 +331,144 @@ export function checkCommonFailureFixes(
   };
 }
 
+/**
+ * Reads simple KEY=VALUE env files without executing them or expanding
+ * variables. Values are used only for the checks below and are never echoed.
+ */
+function parseEnvFile(file: string): Record<string, string> {
+  const values: Record<string, string> = {};
+  if (!fs.existsSync(file)) return values;
+
+  for (const rawLine of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    const match = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
+    if (!match) continue;
+    let value = match[2].trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    values[match[1]] = value;
+  }
+  return values;
+}
+
+/**
+ * Checks that frontend/.env.local points at the backend's configured PORT and
+ * that the API URL is usable (Issue #361). Catches the common "backend runs on
+ * 3001 but the frontend calls 3000" failure, missing /api paths and accidental
+ * plain-HTTP remote URLs.
+ */
+export function checkLocalEnvWiring(
+  rootDir: string,
+  env: Record<string, string | undefined> = {}
+): DiagnosticCheckResult {
+  const name = 'Local Environment Wiring';
+  const backendEnvPath = path.join(rootDir, 'backend', '.env');
+  const frontendEnvPath = path.join(rootDir, 'frontend', '.env.local');
+  const missing = [
+    fs.existsSync(backendEnvPath) ? null : 'backend/.env',
+    fs.existsSync(frontendEnvPath) ? null : 'frontend/.env.local',
+  ].filter((value): value is string => Boolean(value));
+
+  if (missing.length > 0) {
+    return {
+      name,
+      category: 'config',
+      status: 'WARN',
+      message: `Cannot verify API wiring because ${missing.join(' and ')} ${missing.length === 1 ? 'is' : 'are'} missing.`,
+      remediation:
+        'Run npm run diagnostics -- --fix to copy the local templates, or copy backend/env.mvp.example and frontend/env.mvp.local manually.',
+    };
+  }
+
+  const backendFile = parseEnvFile(backendEnvPath);
+  const frontendFile = parseEnvFile(frontendEnvPath);
+  const rawPort = (env.PORT ?? backendFile.PORT ?? '3001').trim();
+  const backendPort = Number(rawPort);
+
+  if (!Number.isInteger(backendPort) || backendPort <= 0 || backendPort > 65_535) {
+    return {
+      name,
+      category: 'config',
+      status: 'FAIL',
+      message: `backend/.env PORT="${rawPort}" is not a valid TCP port.`,
+      remediation: 'Set PORT=3001 in backend/.env (or another free port) and re-run diagnostics.',
+    };
+  }
+
+  const apiUrl = (env.NEXT_PUBLIC_API_URL ?? frontendFile.NEXT_PUBLIC_API_URL ?? '').trim();
+  if (!apiUrl) {
+    return {
+      name,
+      category: 'config',
+      status: 'FAIL',
+      message: 'frontend/.env.local does not define NEXT_PUBLIC_API_URL.',
+      remediation: `Set NEXT_PUBLIC_API_URL=http://localhost:${backendPort}/api in frontend/.env.local.`,
+    };
+  }
+
+  let url: URL;
+  try {
+    url = new URL(apiUrl);
+  } catch {
+    return {
+      name,
+      category: 'config',
+      status: 'FAIL',
+      message: `NEXT_PUBLIC_API_URL="${apiUrl}" is not a valid absolute URL.`,
+      remediation: `Set NEXT_PUBLIC_API_URL=http://localhost:${backendPort}/api in frontend/.env.local.`,
+    };
+  }
+
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    return {
+      name,
+      category: 'config',
+      status: 'FAIL',
+      message: `NEXT_PUBLIC_API_URL uses unsupported protocol "${url.protocol}".`,
+      remediation: 'Use an http:// (local) or https:// (remote) API URL.',
+    };
+  }
+
+  const issues: string[] = [];
+  const host = url.hostname.toLowerCase();
+  const loopback = host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]';
+  if (url.protocol === 'http:' && !loopback) {
+    issues.push(`NEXT_PUBLIC_API_URL uses plain HTTP for non-loopback host "${url.hostname}"`);
+  }
+
+  const urlPort = url.port ? Number(url.port) : url.protocol === 'https:' ? 443 : 80;
+  if (urlPort !== backendPort) {
+    issues.push(`frontend targets port ${urlPort} but backend PORT is ${backendPort}`);
+  }
+
+  const pathname = url.pathname.replace(/\/+$/, '') || '/';
+  if (pathname !== '/api' && !pathname.endsWith('/api')) {
+    issues.push(`NEXT_PUBLIC_API_URL path "${url.pathname}" does not end with /api`);
+  }
+
+  if (issues.length > 0) {
+    return {
+      name,
+      category: 'config',
+      status: env.NODE_ENV === 'production' ? 'FAIL' : 'WARN',
+      message: `${issues.join('; ')}.`,
+      remediation: `Set NEXT_PUBLIC_API_URL=http://localhost:${backendPort}/api in frontend/.env.local and PORT=${backendPort} in backend/.env, then restart both processes.`,
+    };
+  }
+
+  return {
+    name,
+    category: 'config',
+    status: 'PASS',
+    message: `frontend NEXT_PUBLIC_API_URL targets the backend on port ${backendPort} with an /api path.`,
+  };
+}
+
 export interface DiagnosticsSummary {
   timestamp: string;
   totalChecks: number;
@@ -473,7 +611,10 @@ export async function runDiagnostics(
   // 9. Common failure fixes and auto-remediation (Issue #258)
   results.push(checkCommonFailureFixes(rootDir, env, { fix: options.fix }));
 
-  // 10. Live Horizon probe (opt-in, so the default run stays offline and read-only)
+  // 10. Frontend/backend local wiring (Issue #361)
+  results.push(checkLocalEnvWiring(rootDir, env));
+
+  // 11. Live Horizon probe (opt-in, so the default run stays offline and read-only)
   if (options.network) {
     const network = stellarNetwork === 'PUBLIC' ? 'PUBLIC' : 'TESTNET';
     results.push(await checkHorizonNetwork(horizonUrl, network, env.NODE_ENV === 'production', options.probe));

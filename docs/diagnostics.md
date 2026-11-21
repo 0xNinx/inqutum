@@ -32,7 +32,8 @@ The exit code is `1` when any check is `FAIL`, and `0` otherwise, warnings inclu
 7. **Admin Authorization Secrets**: `JOBS_ADMIN_TOKEN` guards `/api/jobs` and `/api/ops/*`. `MAINTAINER_INTENT_SECRET` enables high-impact intents. Flags secrets shorter than 16 characters. A short `MAINTAINER_INTENT_SECRET` silently leaves approvals disabled. Also flags an intent secret set without the admin token, which leaves the intent routes unreachable. This is `WARN` in development and `FAIL` when `NODE_ENV=production`. Values are never printed.
 8. **Database Seed & Schema Fixtures**: Validates `db/seed.sql` and `db/schema.sql` presence, valid Stellar demo wallet addresses (`G...`), positive amounts, and insert statement structure.
 9. **Common Setup & Failure Fixes**: Detects missing local `.env` files, port configuration collisions (e.g. backend `PORT=3000` conflicting with Next.js frontend port `3000`), and uninstalled dependencies.
-10. **Stellar Horizon Reachability** (`--network` only): `GET` on the Horizon root, comparing its `network_passphrase` with the passphrase for `STELLAR_NETWORK`: `Test SDF Network ; September 2015` for TESTNET, `Public Global Stellar Network ; September 2015` for PUBLIC ([Stellar networks](https://developers.stellar.org/docs/networks)). A mismatch is `FAIL`, because payments would be verified on the wrong network.
+10. **Local Environment Wiring** (Issue #361): Parses `backend/.env` and `frontend/.env.local` as data (never executes or echoes values) and compares the backend `PORT` with the port in `NEXT_PUBLIC_API_URL`. Flags the common `3001`/`3000` mismatch, a missing `/api` path, an invalid URL, and plain HTTP to a non-loopback host. `WARN` in development, `FAIL` in production.
+11. **Stellar Horizon Reachability** (`--network` only): `GET` on the Horizon root, comparing its `network_passphrase` with the passphrase for `STELLAR_NETWORK`: `Test SDF Network ; September 2015` for TESTNET, `Public Global Stellar Network ; September 2015` for PUBLIC ([Stellar networks](https://developers.stellar.org/docs/networks)). A mismatch is `FAIL`, because payments would be verified on the wrong network.
 
 ## Automated Fixes (`--fix`)
 
@@ -67,6 +68,8 @@ Worst case, the probe takes 5 × 10 s plus 15 s of backoff, about 65 s. Without 
 |---------|--------|
 | Missing `.env` or `.env.local` | Run `npm run diagnostics -- --fix` to auto-populate from templates. |
 | Port 3000/3001 collision | Ensure `PORT=3001` in `backend/.env` so it does not conflict with frontend port 3000. |
+| Frontend calls the wrong backend port | Set `NEXT_PUBLIC_API_URL=http://localhost:<backend PORT>/api` in `frontend/.env.local` and restart the frontend. |
+| Invalid or incomplete API URL | Use an absolute `http://` (local) or `https://` (remote) URL ending in `/api`; plain HTTP is only accepted for loopback hosts. |
 | Lockfile drift | `cd <workspace> && npm install`, review the diff, commit `package-lock.json`. |
 | Missing or stale packages | `cd <workspace> && npm ci`. |
 | Horizon passphrase mismatch | Fix `STELLAR_HORIZON_URL` or `STELLAR_NETWORK` in `backend/.env`. Restart the API. |
