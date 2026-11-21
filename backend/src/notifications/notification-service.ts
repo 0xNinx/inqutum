@@ -439,7 +439,6 @@ export class NotificationService {
     this.preferenceStore.clear();
     this.receiptStore.clear();
   }
-  }
 }
 
 export const notificationService = new NotificationService();

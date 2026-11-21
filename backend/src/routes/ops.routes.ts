@@ -124,6 +124,14 @@ export interface OpsRouterOptions {
   rollouts?: RolloutGuard;
   /** Projection reconciliation (#255). Defaults to one over `storage` and the live search index. */
   reconciliation?: ReconciliationService;
+  /** Cross-service event schema drift detector (#389). Defaults to the process instance. */
+  eventSchemaDrift?: EventSchemaDriftDetector;
+  /** Safe ownership transfer service (#390). Defaults to one audited via `auditStore`. */
+  ownershipTransfers?: OwnershipTransferService;
+  /** Synthetic journey monitor (#391). Defaults to one over `storage`. */
+  syntheticMonitor?: SyntheticJourneyMonitor;
+  /** Executable incident recovery checks (#392). Defaults to one over `storage` and `jobs`. */
+  recoveryRunner?: IncidentRecoveryRunner;
 }
 
 function defaultApprovals(): MaintainerApprovalService | null {
@@ -199,6 +207,21 @@ export function createOpsRouter(options: OpsRouterOptions): Router {
         ? (id) => options.storage.getAuditEventsByInvoice!(id)
         : undefined,
     });
+  const eventSchemaDrift = options.eventSchemaDrift ?? defaultEventSchemaDriftDetector;
+  const ownershipTransfers =
+    options.ownershipTransfers ??
+    new OwnershipTransferService((evt) => {
+      auditStore.recordEvent({
+        action: 'MAINTAINER_ACTION',
+        actor: { type: 'maintainer', id: evt.actorId },
+        scope: { entityType: 'system', entityId: evt.resourceId },
+        reason: `${evt.type} (${evt.transferId})`,
+        metadata: evt.details,
+      });
+    });
+  const syntheticMonitor = options.syntheticMonitor ?? new SyntheticJourneyMonitor({ storage: options.storage });
+  const recoveryRunner =
+    options.recoveryRunner ?? new IncidentRecoveryRunner({ storage: options.storage, jobs: options.jobs });
 
   if (approvals && options.jobs) {
     const jobs = options.jobs;

@@ -11,7 +11,7 @@ interface StoredIdempotencyRecord {
   scope: string;
   key: string;
   fingerprint: string;
-  state: 'in_progress' | 'completed';
+  state: 'in_progress' | 'completed' | 'stale';
   lockExpiresAt: number;
   expiresAt: number;
   response?: StoredResponse;

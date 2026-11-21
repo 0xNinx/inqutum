@@ -41,6 +41,8 @@ export interface ApiFailure {
   recoveryAction?: string;
   /** Ordered remediation steps for the code (issue #303); see docs/ERRORS.md. */
   remediation?: string[];
+  /** Structured, non-sensitive diagnostic fields for validation failures. */
+  details?: Record<string, unknown>;
   correlationId?: string;
   timestamp?: string;
 }
@@ -76,6 +78,7 @@ export function apiFailure(
     category?: ErrorCategory;
     retryable?: boolean;
     recoveryAction?: string;
+    details?: Record<string, unknown>;
     correlationId?: string;
   }
 ): ApiFailure {
@@ -90,6 +93,7 @@ export function apiFailure(
     retryable: extra?.retryable !== undefined ? extra.retryable : taxonomy?.retryable,
     recoveryAction: extra?.recoveryAction || taxonomy?.recoveryAction,
     ...(taxonomy?.remediation?.length ? { remediation: taxonomy.remediation } : {}),
+    ...(extra?.details ? { details: extra.details } : {}),
     ...(extra?.correlationId ? { correlationId: extra.correlationId } : {}),
     timestamp: new Date().toISOString(),
   };
