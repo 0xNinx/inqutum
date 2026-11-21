@@ -31,6 +31,19 @@ const MIN_ADMIN_SECRET_LENGTH = 16;
 const WORKSPACES = ['backend', 'frontend'] as const;
 const MAX_LISTED = 8;
 
+/**
+ * Diagnostics must never print credentials embedded in a service URL.
+ * Keep only the origin (scheme, host and port); paths and query strings can
+ * contain provider API keys just as easily as userinfo can.
+ */
+export function redactEndpoint(raw: string): string {
+  try {
+    return new URL(raw).origin;
+  } catch {
+    return '[invalid URL]';
+  }
+}
+
 const listNames = (names: string[]) =>
   names.length > MAX_LISTED ? `${names.slice(0, MAX_LISTED).join(', ')} (+${names.length - MAX_LISTED} more)` : names.join(', ');
 
@@ -132,7 +145,7 @@ export async function checkHorizonNetwork(
 ): Promise<DiagnosticCheckResult> {
   const name = 'Stellar Horizon Reachability';
   if (!isAllowedProbeUrl(horizonUrl)) {
-    return { name, category: 'network', status: 'WARN', message: `Skipped probe: ${horizonUrl} is not HTTPS or loopback.`, remediation: 'Use an https:// Horizon endpoint.' };
+    return { name, category: 'network', status: 'WARN', message: `Skipped probe: ${redactEndpoint(horizonUrl)} is not HTTPS or loopback.`, remediation: 'Use an https:// Horizon endpoint.' };
   }
 
   const result = await probeJson(horizonUrl, probe);
@@ -144,7 +157,7 @@ export async function checkHorizonNetwork(
       name,
       category: 'network',
       status: production ? 'FAIL' : 'WARN',
-      message: `Horizon not reachable after ${result.attempts} attempt(s): ${result.message}`,
+      message: `Horizon at ${redactEndpoint(horizonUrl)} was not reachable after ${result.attempts} attempt(s) (${result.reason}${result.status === null ? '' : `, HTTP ${result.status}`}).`,
       remediation: 'Check connectivity, proxies and STELLAR_HORIZON_URL. Offline work is still possible with NEXT_PUBLIC_USE_MOCK=true; re-run with --network when back online.',
     };
   }
@@ -587,14 +600,14 @@ export async function runDiagnostics(
       name: 'Stellar Horizon Gateway',
       category: 'network',
       status: 'PASS',
-      message: `Configured for ${stellarNetwork} via HTTPS: ${horizonUrl}`,
+      message: `Configured for ${stellarNetwork} via HTTPS: ${redactEndpoint(horizonUrl)}`,
     });
   } else {
     results.push({
       name: 'Stellar Horizon Gateway',
       category: 'network',
       status: 'WARN',
-      message: `Horizon URL (${horizonUrl}) does not use HTTPS.`,
+      message: `Horizon URL (${redactEndpoint(horizonUrl)}) does not use HTTPS.`,
       remediation: 'Stellar network communication should use an HTTPS horizon endpoint.',
     });
   }
@@ -663,13 +676,97 @@ export function formatDiagnosticsOutput(summary: DiagnosticsSummary): string {
   return lines.join('\n');
 }
 
-// CLI entrypoint
+
+export interface DiagnosticsCliArguments {
+  network: boolean;
+  fix: boolean;
+  json: boolean;
+  help: boolean;
+}
+
+export interface DiagnosticsCliDependencies {
+  env?: Record<string, string | undefined>;
+  options?: Omit<DiagnosticsOptions, 'network' | 'fix'>;
+  stdout?: (message: string) => void;
+  stderr?: (message: string) => void;
+}
+
+export const DIAGNOSTICS_CLI_USAGE = [
+  'Usage: npm run diagnostics -- [options]',
+  '',
+  'Options:',
+  '  --network  Probe the configured Stellar Horizon endpoint (network access).',
+  '  --fix      Create missing local .env templates; existing files are never overwritten.',
+  '  --json     Print the diagnostics summary as machine-readable JSON.',
+  '  --help     Show this help text.',
+  '',
+  'Exit codes: 0 = no failures (warnings are allowed), 1 = one or more failed checks,',
+  '            2 = invalid command-line arguments.',
+].join('\\n');
+
+export function parseDiagnosticsCliArguments(args: readonly string[]): DiagnosticsCliArguments {
+  const parsed: DiagnosticsCliArguments = { network: false, fix: false, json: false, help: false };
+  for (const arg of args) {
+    switch (arg) {
+      case '--network':
+        parsed.network = true;
+        break;
+      case '--fix':
+        parsed.fix = true;
+        break;
+      case '--json':
+        parsed.json = true;
+        break;
+      case '--help':
+      case '-h':
+        parsed.help = true;
+        break;
+      default:
+        throw new Error(`Unknown diagnostics option: ${arg}`);
+    }
+  }
+  return parsed;
+}
+
+/** Runs the contributor CLI; dependency injection keeps command behaviour testable. */
+export async function runDiagnosticsCli(
+  args: readonly string[] = process.argv.slice(2),
+  dependencies: DiagnosticsCliDependencies = {}
+): Promise<number> {
+  const stdout = dependencies.stdout ?? ((message: string) => console.log(message));
+  const stderr = dependencies.stderr ?? ((message: string) => console.error(message));
+  let parsed: DiagnosticsCliArguments;
+
+  try {
+    parsed = parseDiagnosticsCliArguments(args);
+  } catch (error) {
+    stderr(`${error instanceof Error ? error.message : String(error)}\\n\\n${DIAGNOSTICS_CLI_USAGE}`);
+    return 2;
+  }
+
+  if (parsed.help) {
+    stdout(DIAGNOSTICS_CLI_USAGE);
+    return 0;
+  }
+
+  try {
+    const summary = await runDiagnostics(dependencies.env ?? process.env, {
+      ...dependencies.options,
+      network: parsed.network,
+      fix: parsed.fix,
+    });
+    stdout(parsed.json ? JSON.stringify(summary, null, 2) : formatDiagnosticsOutput(summary));
+    return summary.failures > 0 ? 1 : 0;
+  } catch (error) {
+    stderr(`Diagnostics could not complete: ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
+  }
+}
+
+// CLI entrypoint. Set exitCode rather than exiting immediately so output is flushed.
 if (require.main === module || process.argv[1]?.endsWith('diagnostics.ts')) {
-  const network = process.argv.includes('--network');
-  const fix = process.argv.includes('--fix');
-  runDiagnostics(process.env, { network, fix }).then((summary) => {
-    console.log(formatDiagnosticsOutput(summary));
-    process.exit(summary.failures > 0 ? 1 : 0);
+  void runDiagnosticsCli().then((code) => {
+    process.exitCode = code;
   });
 }
 
