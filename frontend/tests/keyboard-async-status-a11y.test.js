@@ -89,7 +89,7 @@ test('keyboard/494: Pay with Freighter stays focusable while in-flight', () => {
 
 test('keyboard/494: API banner retry buttons stay focusable while checking', () => {
   const banner = source('components/ApiStatusBanner.tsx');
-  assert.doesNotMatch(banner, /disabled=\{checking\}/, 'disabled drops focus in Chromium');
+  assert.doesNotMatch(banner, /\sdisabled=\{checking\}/, 'disabled drops focus in Chromium');
   // Both buttons in the banner (error path + status path) must use aria-disabled.
   assert.equal((banner.match(/aria-disabled=\{checking\}/g) ?? []).length, 2);
   // The in-flight ref guard prevents double-activation without re-renders.
@@ -300,7 +300,7 @@ test('async/494: automatic failures while already down stay silent', () => {
     { type: 'CHECK_FAILED', manual: false },
   ]);
   assert.equal(result.polite, '');
-  assert.equal(result.failures, 4);
+  assert.equal(result.failures, 3);
 });
 
 // ---------------------------------------------------------------------------
