@@ -82,3 +82,23 @@ The diagnostics command defaults to strictly **read-only** and performs non-dest
 ## Compatibility
 
 `runDiagnostics(env)` keeps its signature. The second argument (`{ network, rootDir, probe, fix }`) is optional. Existing consumers that switch on known categories are unaffected.
+
+## CLI output and safe logging (#495)
+
+The command also supports a machine-readable mode and a help screen:
+
+```bash
+npm run diagnostics -- --help
+npm run diagnostics -- --json
+```
+
+The JSON mode writes one diagnostics summary to stdout and preserves the same
+exit-code contract as the human-readable report. Unknown flags fail with exit
+code `2`; diagnostics failures return `1`; warnings alone return `0`.
+The live Horizon probe remains opt-in through `--network`, and `--fix`
+remains opt-in and only creates missing template files.
+
+Diagnostics never print URL userinfo, path segments, or query parameters.
+Some providers put API credentials in those URL components, so reports show
+only the endpoint origin. If a command is interrupted or a probe fails, no
+application data is changed; rerun the command after correcting configuration.

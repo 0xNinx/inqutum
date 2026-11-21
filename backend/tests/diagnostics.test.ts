@@ -324,3 +324,63 @@ describe('Contributor diagnostics: dependency, authorization and network validat
     });
   });
 });
+
+
+describe('Contributor diagnostics CLI (#495)', () => {
+  it('parses supported flags and rejects unknown options instead of silently ignoring typos', async () => {
+    const { parseDiagnosticsCliArguments } = await import('../../scripts/diagnostics');
+    assert.deepEqual(parseDiagnosticsCliArguments(['--network', '--fix', '--json']), {
+      network: true,
+      fix: true,
+      json: true,
+      help: false,
+    });
+    assert.equal(parseDiagnosticsCliArguments(['--help']).help, true);
+    assert.throws(() => parseDiagnosticsCliArguments(['--netwrok']), /Unknown diagnostics option/);
+  });
+
+  it('prints help without running diagnostics', async () => {
+    const { runDiagnosticsCli } = await import('../../scripts/diagnostics');
+    const output: string[] = [];
+    const errors: string[] = [];
+    const code = await runDiagnosticsCli(['--help'], {
+      stdout: (message) => output.push(message),
+      stderr: (message) => errors.push(message),
+    });
+    assert.equal(code, 0);
+    assert.match(output[0] ?? '', /Usage: npm run diagnostics/);
+    assert.equal(errors.length, 0);
+  });
+
+  it('emits valid JSON and returns a failing exit code when critical checks fail', async () => {
+    const { runDiagnosticsCli } = await import('../../scripts/diagnostics');
+    const output: string[] = [];
+    const errors: string[] = [];
+    const code = await runDiagnosticsCli(['--json'], {
+      env: { NODE_ENV: 'production', ALLOW_SIMULATE: 'true' },
+      options: { rootDir: path.resolve(__dirname, '../..') },
+      stdout: (message) => output.push(message),
+      stderr: (message) => errors.push(message),
+    });
+    assert.equal(code, 1);
+    const report = JSON.parse(output[0] ?? '');
+    assert.ok(report.failures > 0);
+    assert.ok(report.results.some((result: any) => result.name === 'Environment Validation' && result.status === 'FAIL'));
+    assert.equal(errors.length, 0);
+  });
+
+  it('does not expose credentials, API-key paths, or query strings from Horizon URLs', async () => {
+    const { checkHorizonNetwork, redactEndpoint } = await import('../../scripts/diagnostics');
+    const endpoint = 'https://operator:secret@horizon.example/private/key-path?token=query-secret';
+    assert.equal(redactEndpoint(endpoint), 'https://horizon.example');
+
+    const scripted = scriptedProbe([{ status: 503 }]);
+    const result = await checkHorizonNetwork(endpoint, 'TESTNET', false, {
+      ...scripted.probe,
+      maxAttempts: 1,
+    });
+    const serialized = JSON.stringify(result);
+    assert.doesNotMatch(serialized, /operator|secret|private|key-path|token/);
+    assert.match(serialized, /horizon\.example/);
+  });
+});
