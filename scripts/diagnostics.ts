@@ -702,7 +702,7 @@ export const DIAGNOSTICS_CLI_USAGE = [
   '',
   'Exit codes: 0 = no failures (warnings are allowed), 1 = one or more failed checks,',
   '            2 = invalid command-line arguments.',
-].join('\\n');
+].join(String.fromCharCode(10));
 
 export function parseDiagnosticsCliArguments(args: readonly string[]): DiagnosticsCliArguments {
   const parsed: DiagnosticsCliArguments = { network: false, fix: false, json: false, help: false };
@@ -740,7 +740,7 @@ export async function runDiagnosticsCli(
   try {
     parsed = parseDiagnosticsCliArguments(args);
   } catch (error) {
-    stderr(`${error instanceof Error ? error.message : String(error)}\\n\\n${DIAGNOSTICS_CLI_USAGE}`);
+    stderr(`${error instanceof Error ? error.message : String(error)}${String.fromCharCode(10)}${String.fromCharCode(10)}${DIAGNOSTICS_CLI_USAGE}`);
     return 2;
   }
 
