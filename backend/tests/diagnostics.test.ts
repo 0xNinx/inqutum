@@ -381,6 +381,6 @@ describe('Contributor diagnostics CLI (#495)', () => {
     });
     const serialized = JSON.stringify(result);
     assert.doesNotMatch(serialized, /operator|secret|private|key-path|token/);
-    assert.match(serialized, /horizon\\.example/);
+    assert.match(serialized, /horizon\.example/);
   });
 });
