@@ -81,6 +81,7 @@ export class JobWorker {
   private readonly pollIntervalMs: number;
   private readonly now: () => Date;
   private readonly log: (message: string, meta?: Record<string, unknown>) => void;
+  private readonly gate: (type: string) => boolean;
   private readonly activeExecutions = new Map<
     string,
     { controller: AbortController; cleanups: Array<() => Promise<void> | void> }

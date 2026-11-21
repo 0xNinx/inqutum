@@ -55,6 +55,29 @@ it with `registerMetadataMinimizationJob(worker, { db })`.
 The result reports counts per category, held rows, escalations and
 unclassified keys. Removed **values are never reported**, only paths.
 
+## Sensitive metadata enforcement tests (Issue #359)
+
+`backend/tests/sensitive-metadata-retention.test.ts` pins the enforcement
+matrix against the real executor and job worker:
+
+```bash
+cd backend
+node --import tsx --test tests/sensitive-metadata-retention.test.ts
+```
+
+| Path | What is asserted |
+| --- | --- |
+| Normal | A 100-day-old invoice loses `ip` / `user_agent` (30 d) and `request_id` (90 d), keeps `order`, and a dry run writes nothing. |
+| Boundary | A network identifier is kept at 29 days and removed at exactly 30 days. |
+| Failure | An invalid `created_at` disables age-based removal but still removes `password`; a failed UPDATE leaves the row untouched. |
+| Retry | A transient SELECT failure requeues `metadata.minimize`; the next attempt succeeds and applies the same minimization. |
+| Authorization | A legal hold blocks all removals and escalates `password`; a settlement-linked invoice survives row retention while its IP is still minimized. |
+
+Recovery follows the same rules as a normal run: fix the database/transient
+error and re-run. Minimization is idempotent and compare-and-set, so a retry
+converges without overwriting concurrent edits. If a hold was added after the
+read, the compare-and-set skips the row and the next run re-reviews it.
+
 ## Edge cases and failure modes
 
 | Situation | Behaviour |
