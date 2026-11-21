@@ -35,3 +35,4 @@ npm test
 
 CI runs on every push and pull request targeting `dev` or `main`.
 Pull requests must target `dev`. See [CONTRIBUTING.md](CONTRIBUTING.md).
+

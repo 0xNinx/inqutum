@@ -8,6 +8,8 @@ export const EXPIRY_SWEEP_INTERVAL_MS = 60_000;
 export const RESUMABLE_REPAIR_JOB = 'records.resumable-repair';
 /** Detect-only projection reconciliation (#255). Never repairs; apply goes through /ops/reconciliation. */
 export const RECONCILE_PROJECTIONS_JOB = 'projections.reconcile';
+/** Stale authorization cleanup (#199). Payload `{ dryRun?: boolean, graceMs?: number }`; applies unless dryRun is true. */
+export const AUTHORIZATION_CLEANUP_JOB = 'authorizations.cleanup-stale';
 
 export interface JobHandlerDeps {
   /** Marks overdue PENDING invoices EXPIRED and returns how many changed. Must be idempotent. */
@@ -22,6 +24,8 @@ export interface JobHandlerDeps {
   }) => Promise<unknown>;
   /** Dry-run reconciliation of derived projections against storage. */
   reconcileProjections?: () => Promise<unknown>;
+  /** Marks expired authorizations past their grace period as cleaned (see createAuthorizationCleanupHandler). */
+  cleanupStaleAuthorizations?: (payload: { data?: { dryRun?: boolean; graceMs?: number } }) => Promise<unknown>;
 }
 
 function assertPositiveFiniteNumber(value: number, name: string): void {
@@ -84,6 +88,12 @@ export function registerJobHandlers(worker: JobWorker, deps: JobHandlerDeps): Jo
 
   if (deps.reconcileProjections) {
     worker.register(RECONCILE_PROJECTIONS_JOB, async () => deps.reconcileProjections!());
+  }
+
+  if (deps.cleanupStaleAuthorizations) {
+    worker.register(AUTHORIZATION_CLEANUP_JOB, async (payload) =>
+      deps.cleanupStaleAuthorizations!(payload as { data?: { dryRun?: boolean; graceMs?: number } })
+    );
   }
 
   return worker;

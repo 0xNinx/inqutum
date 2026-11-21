@@ -3,6 +3,8 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import routes from './routes';
 import { pool } from './config/database';
+import { emailService } from './services/email.service';
+import { PostgresCheckpointStore } from './recovery/side-effect-checkpoint';
 import { validateStellarConfig, SELLER_PUBLIC_KEY } from './config/stellar';
 import paymentMonitorService from './services/payment-monitor.service';
 import { configuredFrontendOrigins, corsOptions } from './config/runtime';
@@ -32,6 +34,8 @@ const PORT = envCheck.validated.PORT || process.env.PORT || 3001;
 // Background jobs: the expiry sweep runs through the worker framework. Set
 // JOBS_EMBEDDED_WORKER=false to run workers only via `npm run worker`.
 const jobStore = new PostgresJobStore(pool);
+// Invoice-email checkpoints must survive a restart, so they live in Postgres (#425).
+emailService.useCheckpointStore(new PostgresCheckpointStore(pool));
 const jobWorker = registerJobHandlers(new JobWorker({ store: jobStore, gate: (type) => publicStatusService.backgroundGate(type).run }), {
   expirePendingInvoices: () => invoiceService.markExpiredInvoices(),
   // Detect-only: the job reports drift, repair stays a reviewed /ops/reconciliation apply.

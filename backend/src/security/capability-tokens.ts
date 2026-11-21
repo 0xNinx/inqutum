@@ -47,6 +47,11 @@ export const SENSITIVE_ACTIONS = {
     defaultTtlMs: 5 * 60_000,
     maxTtlMs: 15 * 60_000,
   },
+  'config.feature_flag.rollout': {
+    description: 'Ramp a feature rollout or clear its kill switch (target: flag name). Emergency disable needs no capability.',
+    defaultTtlMs: 5 * 60_000,
+    maxTtlMs: 15 * 60_000,
+  },
 } as const satisfies Record<string, SensitiveActionSpec>;
 
 export type SensitiveAction = keyof typeof SENSITIVE_ACTIONS;

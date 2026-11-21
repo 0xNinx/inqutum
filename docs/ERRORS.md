@@ -171,7 +171,7 @@ regenerating fails `backend/tests/error-remediation.test.ts`.
 | `EMAIL_DELIVERY_NOT_FOUND` | 404 | NOT_FOUND | no | Check the messageId; only provider-confirmed ids resolve. | 1. Copy the messageId returned by the original send.<br>2. List deliveries via GET /api/email/deliveries to find the id. | |
 | `EMAIL_WEBHOOK_INVALID` | 400 | VALIDATION | no | Send messageId, event (bounce\|complaint\|delivered), and an optional reason. | 1. Fix the payload so event is one of bounce, complaint, delivered.<br>2. Resend the provider callback. | |
 
-### Exports (7 codes)
+### Exports (10 codes)
 
 | Code | HTTP | Category | Retryable | Recovery action | Remediation hints |
 | --- | --- | --- | --- | --- | --- |
@@ -180,6 +180,9 @@ regenerating fails `backend/tests/error-remediation.test.ts`.
 | `EXPORT_FORBIDDEN` | 403 | AUTHORIZATION | no | Request exports only for keys you control; pass a requester you own. | 1. Sign the request with the requester public key that owns the data.<br>2. Ask a maintainer to grant access to the requested range. | |
 | `EXPORT_NOT_FOUND` | 404 | NOT_FOUND | no | Check the export id; expired exports are deleted. | 1. List exports to find a live id.<br>2. Create a new export if the old one expired. | |
 | `EXPORT_TIMED_OUT` | 503 | NETWORK | yes | Narrow the filters and try again. | 1. Reduce the date range or row count of the export.<br>2. Retry with the narrower filters. | |
+| `INVALID_EXPORT_FIELDS` | 400 | VALIDATION | no | Request only field names listed in docs/EXPORTS.md. | 1. Remove unknown field names from the fields list.<br>2. Send between 1 and 32 field names, or omit fields for the default set. | |
+| `EXPORT_FIELD_FORBIDDEN` | 403 | AUTHORIZATION | no | Drop the fields listed in deniedFields and request the export again. | 1. Personal fields (names, emails) are never exportable.<br>2. Counterparty fields need a grant the public export route does not give. | |
+| `EXPORT_IDEMPOTENCY_CONFLICT` | 409 | VALIDATION | no | Use a new Idempotency-Key for a different export request. | 1. Reuse a key only to retry the exact same export request.<br>2. Generate a fresh key when changing format, filters or fields. | |
 | `INVALID_EXPORT_REQUEST` | 400 | VALIDATION | no | Fix the request fields listed in the message. | 1. Read the field errors joined in the message body.<br>2. Resend a corrected export request. | |
 | `REQUESTER_REQUIRED` | 400 | VALIDATION | no | Add ?requester=<public key> so the export can be scoped to you. | 1. Append the requester query parameter with your public key.<br>2. Resend the request. | |
 

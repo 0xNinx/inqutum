@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 type RuntimeEnvironment = Record<string, string | undefined>;
 
 interface FlagDefinition {
@@ -43,6 +45,46 @@ export const featureFlagOverrides = {
   },
 };
 
+/**
+ * Rollout state (#309), written only by the rollout controller
+ * (config/feature-rollout.ts). Precedence when evaluating a flag:
+ *
+ *   kill switch (forces the safe default)
+ *     > runtime override (admin-config.ts)
+ *       > rollout percentage, when one is set
+ *         > environment / safe default
+ *
+ * A flag that never had a rollout configured behaves exactly as before.
+ */
+const killSwitches = new Set<FeatureFlag>();
+const rolloutPercentages = new Map<FeatureFlag, number>();
+
+export const featureFlagKillSwitches = {
+  isEngaged: (flag: FeatureFlag): boolean => killSwitches.has(flag),
+  set: (flag: FeatureFlag, engaged: boolean): void => {
+    if (engaged) killSwitches.add(flag);
+    else killSwitches.delete(flag);
+  },
+};
+
+export const featureFlagRollouts = {
+  get: (flag: FeatureFlag): number | undefined => rolloutPercentages.get(flag),
+  /** `null` removes the rollout so the environment value applies again. */
+  set: (flag: FeatureFlag, percentage: number | null): void => {
+    if (percentage === null) rolloutPercentages.delete(flag);
+    else rolloutPercentages.set(flag, percentage);
+  },
+};
+
+/**
+ * Stable bucket in [0, 10000) for a subject (wallet, invoice id). The same
+ * subject keeps its bucket as the percentage grows, so a ramp only ever adds
+ * subjects and never flips an already-enabled one off.
+ */
+export function rolloutBucket(flag: FeatureFlag, subjectKey: string): number {
+  return createHash('sha256').update(`${flag}:${subjectKey}`).digest().readUInt32BE(0) % 10_000;
+}
+
 /** The value the environment (or the safe default) gives a flag, ignoring runtime overrides. */
 export function environmentFeatureValue(flag: FeatureFlag, env: RuntimeEnvironment = process.env): boolean {
   const definition: FlagDefinition = FEATURE_FLAGS[flag];
@@ -52,8 +94,27 @@ export function environmentFeatureValue(flag: FeatureFlag, env: RuntimeEnvironme
   return definition.safeDefault;
 }
 
+/**
+ * Without a subject, a partial rollout counts as off: only 100% enables the
+ * flag. Use `isFeatureEnabledFor` where a subject is available.
+ */
 export function isFeatureEnabled(flag: FeatureFlag, env: RuntimeEnvironment = process.env): boolean {
-  return runtimeOverrides.get(flag) ?? environmentFeatureValue(flag, env);
+  if (killSwitches.has(flag)) return FEATURE_FLAGS[flag].safeDefault;
+  const override = runtimeOverrides.get(flag);
+  if (override !== undefined) return override;
+  const percentage = rolloutPercentages.get(flag);
+  if (percentage !== undefined) return percentage >= 100;
+  return environmentFeatureValue(flag, env);
+}
+
+/** Like `isFeatureEnabled`, but a partial rollout enables the flag for a stable share of subjects. */
+export function isFeatureEnabledFor(flag: FeatureFlag, subjectKey: string, env: RuntimeEnvironment = process.env): boolean {
+  if (killSwitches.has(flag)) return FEATURE_FLAGS[flag].safeDefault;
+  const override = runtimeOverrides.get(flag);
+  if (override !== undefined) return override;
+  const percentage = rolloutPercentages.get(flag);
+  if (percentage !== undefined) return rolloutBucket(flag, subjectKey) < percentage * 100;
+  return environmentFeatureValue(flag, env);
 }
 
 /** Effective state of every flag, reported by /api/health for rollout checks. */

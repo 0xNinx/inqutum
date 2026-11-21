@@ -230,7 +230,9 @@ describe('API contract — response envelopes', () => {
     // new one is a deliberate act and must be justified in review.
     assert.deepEqual(
       API_CONTRACT.filter((e) => e.responseKind === 'raw').map((e) => e.path).sort(),
-      ['/', '/api/audit/export', '/api/exports/:id', '/api/health', '/api/health/dependencies', '/api/metrics', '/api/ready'].sort()
+      // /api/ops/ledger/export (#250): an archive document (JSON or NDJSON) that the
+      // offline verifier reads as-is, so it cannot sit inside an envelope.
+      ['/', '/api/audit/export', '/api/exports/:id', '/api/health', '/api/health/dependencies', '/api/metrics', '/api/ops/ledger/export', '/api/ready'].sort()
     );
   });
 

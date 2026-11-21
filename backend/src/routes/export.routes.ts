@@ -1,9 +1,18 @@
 import { Request, Response, Router } from 'express';
 import { z } from 'zod';
 import { stellarPublicKeySchema } from '../utils/validation';
-import { sendFailure, sendSuccess } from '../types/api';
+import { apiFailure, sendFailure, sendSuccess } from '../types/api';
 import type { InvoiceStorage } from '../storage/invoice-storage';
-import { ExportCancelledError, ExportForbiddenError, ExportService } from '../exports/export-service';
+import {
+  ExportCancelledError,
+  ExportFieldError,
+  ExportFieldForbiddenError,
+  ExportForbiddenError,
+  ExportIdempotencyConflictError,
+  ExportService,
+  MAX_SELECTED_FIELDS,
+  OWNER_ACCESS,
+} from '../exports/export-service';
 import { PublicStatusService, publicStatusService } from '../ops/public-status';
 
 export interface ExportRouterOptions {
@@ -25,12 +34,17 @@ const requestSchema = z.object({
   status: z.enum(['PENDING', 'PAID', 'EXPIRED', 'CANCELLED']).optional(),
   from: z.string().datetime().optional(),
   to: z.string().datetime().optional(),
+  /** Field selection (#308). Omit for the default v1 field set. */
+  fields: z.array(z.string().max(64)).min(1).max(MAX_SELECTED_FIELDS).optional(),
+  /** Same as the Idempotency-Key header; the header wins when both are sent. */
+  idempotencyKey: z.string().min(1).max(200).optional(),
 });
 
 /**
  * Data export routes. Mount under `/api`.
  *
- *   POST /exports                 { requester, format?, status?, from?, to? }
+ *   POST /exports                 { requester, format?, status?, from?, to?, fields? }
+ *                                 optional Idempotency-Key header
  *   GET  /exports/:id?requester=  download while the artifact is retained
  */
 export function createExportRouter(options: ExportRouterOptions): Router {
@@ -49,7 +63,15 @@ export function createExportRouter(options: ExportRouterOptions): Router {
         correlationId: req.correlationId,
       });
     }
-    const { requester, sellerPublicKey, format, status, from, to } = parsed.data;
+    const { requester, sellerPublicKey, format, status, from, to, fields } = parsed.data;
+    const header = req.headers?.['idempotency-key'];
+    if (header !== undefined && (typeof header !== 'string' || header.length === 0 || header.length > 200)) {
+      return sendFailure(res, 400, 'Idempotency-Key must be 1-200 characters', {
+        code: 'INVALID_EXPORT_REQUEST',
+        correlationId: req.correlationId,
+      });
+    }
+    const idempotencyKey = (header as string | undefined) ?? parsed.data.idempotencyKey;
 
     // Cancellation (#288): a client that disconnects, or a run past the
     // deadline, stops generation at the next storage page. `res` (not `req`)
@@ -64,9 +86,11 @@ export function createExportRouter(options: ExportRouterOptions): Router {
     try {
       const artifact = await service.create(
         requester,
-        { format, status, from: from ? new Date(from) : undefined, to: to ? new Date(to) : undefined },
+        { format, status, from: from ? new Date(from) : undefined, to: to ? new Date(to) : undefined, fields, idempotencyKey },
         sellerPublicKey ?? requester,
-        controller.signal
+        controller.signal,
+        // The requester is caller-asserted, so the public route never grants more than owner access.
+        OWNER_ACCESS
       );
 
       if (options.storage.recordAuditEvent) {
@@ -76,7 +100,12 @@ export function createExportRouter(options: ExportRouterOptions): Router {
             actor: { type: 'seller', id: requester, ip: req.ip },
             scope: { entityType: 'system', entityId: artifact.meta.exportId },
             reason: 'Invoice data export generated',
-            metadata: { schemaVersion: artifact.meta.schemaVersion, recordCount: artifact.meta.recordCount, format },
+            metadata: {
+              schemaVersion: artifact.meta.schemaVersion,
+              recordCount: artifact.meta.recordCount,
+              format,
+              ...(fields ? { fields: artifact.meta.fields } : {}),
+            },
             correlationId: req.correlationId,
           })
           .catch((err) => console.error('Audit log error on export:', err?.message ?? err));
@@ -90,6 +119,18 @@ export function createExportRouter(options: ExportRouterOptions): Router {
     } catch (error) {
       if (error instanceof ExportForbiddenError) {
         return sendFailure(res, 403, error.message, { code: 'EXPORT_FORBIDDEN', correlationId: req.correlationId });
+      }
+      if (error instanceof ExportFieldForbiddenError) {
+        return res.status(403).json({
+          ...apiFailure(error.message, { code: 'EXPORT_FIELD_FORBIDDEN', correlationId: req.correlationId }),
+          deniedFields: error.denied,
+        });
+      }
+      if (error instanceof ExportFieldError) {
+        return sendFailure(res, 400, error.message, { code: 'INVALID_EXPORT_FIELDS', correlationId: req.correlationId });
+      }
+      if (error instanceof ExportIdempotencyConflictError) {
+        return sendFailure(res, 409, error.message, { code: 'EXPORT_IDEMPOTENCY_CONFLICT', correlationId: req.correlationId });
       }
       if (error instanceof ExportCancelledError) {
         // Nothing was stored. A disconnected client has nobody to answer.
