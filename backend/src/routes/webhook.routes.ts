@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { createWebhookMiddleware } from '../webhooks/webhook-middleware';
-import { sendSuccess } from '../types/api';
+import { apiFailure, sendSuccess } from '../types/api';
 import type { WebhookConfig } from '../webhooks/types';
 
 export interface WebhookRouterOptions {
@@ -9,6 +9,9 @@ export interface WebhookRouterOptions {
 
 /**
  * Webhook routes. Only mounted when WEBHOOK_SIGNING_SECRET is set.
+ *
+ * If handling a verified event throws, the event ID is released (#430) and the
+ * route answers 500 so the provider redelivers the same event ID.
  */
 export function createWebhookRouter(options: WebhookRouterOptions): Router | null {
   const secret = options.signingSecret || process.env.WEBHOOK_SIGNING_SECRET;
@@ -27,12 +30,22 @@ export function createWebhookRouter(options: WebhookRouterOptions): Router | nul
     const eventId = req.webhookEventId;
     const payload = req.body;
 
-    console.log(`Webhook received: event=${eventId}, type=${payload?.type || 'unknown'}`);
+    try {
+      console.log(`Webhook received: event=${eventId}, type=${payload?.type || 'unknown'}`);
 
-    sendSuccess(res, 200, {
-      received: true,
-      eventId,
-    });
+      sendSuccess(res, 200, {
+        received: true,
+        eventId,
+      });
+    } catch (error) {
+      req.releaseWebhookEvent?.();
+      res.status(500).json(
+        apiFailure('Webhook processing failed; the event can be redelivered', {
+          code: 'WEBHOOK_HANDLER_FAILED',
+          retryable: true,
+        })
+      );
+    }
   });
 
   return router;
