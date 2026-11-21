@@ -363,7 +363,7 @@ describe('Contributor diagnostics CLI (#495)', () => {
       stderr: (message) => errors.push(message),
     });
     assert.equal(code, 1);
-    const report = JSON.parse(output.join('\\n'));
+    const report = JSON.parse(output[0] ?? '');
     assert.ok(report.failures > 0);
     assert.ok(report.results.some((result: any) => result.name === 'Environment Validation' && result.status === 'FAIL'));
     assert.equal(errors.length, 0);
