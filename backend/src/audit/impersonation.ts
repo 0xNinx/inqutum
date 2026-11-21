@@ -77,6 +77,7 @@ export interface AuthorizationDecision {
     | 'NO_ACTIVE_SESSION'
     | 'SESSION_EXPIRED'
     | 'SESSION_ENDED'
+    | 'SESSION_REVOKED'
     | 'MISSING_PERMISSION'
     | 'ELEVATION_REQUIRED'
     | 'NEVER_ALLOWED';
