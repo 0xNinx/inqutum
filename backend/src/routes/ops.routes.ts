@@ -91,6 +91,10 @@ import {
   type RepairPhase,
 } from '../ops/resumable-repair.service';
 import { pool } from '../config/database';
+import { PublicStatusError, PublicStatusService, publicStatusService } from '../ops/public-status';
+import { RolloutGuard, RolloutGuardError, rolloutGuard } from '../config/rollout-guard';
+import type { FeatureFlag } from '../config/feature-flags';
+import { ReconciliationError, ReconciliationService } from '../ops/reconciliation';
 import { EventLedger, eventLedger } from '../audit/event-ledger';
 import { FeatureRolloutController, featureRollout } from '../config/feature-rollout';
 import { registerGovernanceRoutes } from './governance.routes';
@@ -126,6 +130,22 @@ export interface OpsRouterOptions {
   externalReferences?: ExternalReferenceVerificationService;
   /** Custom external reference probe for verification routes. */
   externalReferenceProbe?: ExternalReferenceProbe;
+  /** Dependency degradation state. Defaults to the process instance. */
+  degradedMode?: DegradedModeService;
+  /** Public status (#254). Defaults to the process instance. */
+  publicStatus?: PublicStatusService;
+  /** Feature-flag rollout guard (#256). Defaults to the process instance. */
+  rollouts?: RolloutGuard;
+  /** Projection reconciliation (#255). Defaults to one over `storage` and the live search index. */
+  reconciliation?: ReconciliationService;
+  /** Cross-service event schema drift detector (#389). Defaults to the process instance. */
+  eventSchemaDrift?: EventSchemaDriftDetector;
+  /** Safe ownership transfer service (#390). Defaults to one audited via `auditStore`. */
+  ownershipTransfers?: OwnershipTransferService;
+  /** Synthetic journey monitor (#391). Defaults to one over `storage`. */
+  syntheticMonitor?: SyntheticJourneyMonitor;
+  /** Executable incident recovery checks (#392). Defaults to one over `storage` and `jobs`. */
+  recoveryRunner?: IncidentRecoveryRunner;
   /** Tamper-evident event ledger (#250). Defaults to the process ledger. */
   ledger?: EventLedger;
   /** Feature rollout guardrails (#309). Defaults to the process controller. */
@@ -232,6 +252,21 @@ export function createOpsRouter(options: OpsRouterOptions): Router {
         ? (id) => options.storage.getAuditEventsByInvoice!(id)
         : undefined,
     });
+  const eventSchemaDrift = options.eventSchemaDrift ?? defaultEventSchemaDriftDetector;
+  const ownershipTransfers =
+    options.ownershipTransfers ??
+    new OwnershipTransferService((evt) => {
+      auditStore.recordEvent({
+        action: 'MAINTAINER_ACTION',
+        actor: { type: 'maintainer', id: evt.actorId },
+        scope: { entityType: 'system', entityId: evt.resourceId },
+        reason: `${evt.type} (${evt.transferId})`,
+        metadata: evt.details,
+      });
+    });
+  const syntheticMonitor = options.syntheticMonitor ?? new SyntheticJourneyMonitor({ storage: options.storage });
+  const recoveryRunner =
+    options.recoveryRunner ?? new IncidentRecoveryRunner({ storage: options.storage, jobs: options.jobs });
 
   if (approvals && options.jobs) {
     const jobs = options.jobs;

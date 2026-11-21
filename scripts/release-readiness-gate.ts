@@ -61,6 +61,95 @@ const BASELINE_APPROVED_DESTRUCTIVE = ['invoices.user_id', 'users', 'user_id'];
 
 const errorMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
+export interface MigrationArtifactReport {
+  details: string[];
+  failures: string[];
+}
+
+/**
+ * Validates incremental migration artifacts before release (Issue #362).
+ * Filenames are the only ordering contract the runner has, so duplicates or
+ * malformed names must fail the gate rather than apply in an arbitrary order.
+ */
+export function checkMigrationArtifacts(repoRoot: string): MigrationArtifactReport {
+  const dir = path.join(repoRoot, 'db', 'migrations');
+  if (!fs.existsSync(dir)) {
+    return { details: ['No db/migrations directory; db/schema.sql is the sole migration source.'], failures: [] };
+  }
+
+  const files = fs
+    .readdirSync(dir)
+    .filter((file) => file.toLowerCase().endsWith('.sql'))
+    .sort();
+  if (files.length === 0) {
+    return { details: ['db/migrations contains no .sql files.'], failures: [] };
+  }
+
+  const details: string[] = [];
+  const failures: string[] = [];
+  const versions = new Map<string, string[]>();
+
+  for (const file of files) {
+    const match = /^(\d{3,})[-_]([a-z0-9][a-z0-9._-]*)\.sql$/.exec(file);
+    if (!match) {
+      failures.push(
+        `Migration "${file}" must match <numeric-version>-<description>.sql (for example 004-add-index.sql).`
+      );
+      continue;
+    }
+    const version = match[1];
+    versions.set(version, [...(versions.get(version) ?? []), file]);
+    if (fs.statSync(path.join(dir, file)).size === 0) {
+      failures.push(`Migration "${file}" is empty.`);
+    }
+  }
+
+  for (const [version, names] of versions) {
+    if (names.length > 1) {
+      failures.push(`Duplicate migration version ${version}: ${names.join(', ')}.`);
+    }
+  }
+
+  if (failures.length === 0) {
+    details.push(
+      `Verified ${files.length} incremental migration file(s) with unique numeric versions: ${files.join(', ')}.`
+    );
+  }
+
+  return { details, failures };
+}
+
+/** Requires rollback, forward-fix and backup guidance to exist before a release (Issue #362). */
+export function checkRollbackDocumentation(repoRoot: string): MigrationArtifactReport {
+  const docPath = path.join(repoRoot, 'docs', 'MIGRATIONS.md');
+  if (!fs.existsSync(docPath)) {
+    return {
+      details: [],
+      failures: ['docs/MIGRATIONS.md is missing; rollback and recovery steps are not documented.'],
+    };
+  }
+
+  const text = fs.readFileSync(docPath, 'utf8');
+  const failures: string[] = [];
+  if (!/rollback/i.test(text)) {
+    failures.push('docs/MIGRATIONS.md does not describe rollback steps.');
+  }
+  if (!/(forward[- ]fix|restore from|re-run)/i.test(text)) {
+    failures.push('docs/MIGRATIONS.md does not describe forward-fix or restore recovery steps.');
+  }
+  if (!/(pg_dump|pre-migrate|backup)/i.test(text)) {
+    failures.push('docs/MIGRATIONS.md does not require a pre-migration backup.');
+  }
+
+  return {
+    details:
+      failures.length === 0
+        ? ['Verified rollback, forward-fix and backup guidance in docs/MIGRATIONS.md.']
+        : [],
+    failures,
+  };
+}
+
 export async function checkMigrationsGate(
   repoRoot: string,
   options: Pick<GateOptions, 'approvedDestructive' | 'database'> = {}
@@ -149,7 +238,38 @@ export async function checkMigrationsGate(
   details.push('All table creation statements are idempotent (IF NOT EXISTS verified).');
   details.push('Zero uncontained destructive drops detected.');
 
-  // Invariant 3: when a target database is supplied, the schema must have converged on it.
+  // Invariant 3: incremental migration artifacts and rollback documentation.
+  const artifacts = checkMigrationArtifacts(repoRoot);
+  if (artifacts.failures.length > 0) {
+    return {
+      name: 'Migrations & Schema Convergence Gate',
+      category: 'migrations',
+      status: 'FAIL',
+      summary: `Incremental migration artifacts are invalid (${artifacts.failures.length} issue(s)).`,
+      details: [...details, ...artifacts.failures],
+      remediation:
+        'Rename migrations to <numeric-version>-<description>.sql with unique versions, and remove empty files before release.',
+    };
+  }
+  details.push(...artifacts.details);
+
+  if (fs.existsSync(path.join(repoRoot, 'db', 'migrations'))) {
+    const rollbackDocs = checkRollbackDocumentation(repoRoot);
+    if (rollbackDocs.failures.length > 0) {
+      return {
+        name: 'Migrations & Schema Convergence Gate',
+        category: 'migrations',
+        status: 'FAIL',
+        summary: 'Rollback documentation is incomplete.',
+        details: [...details, ...rollbackDocs.failures],
+        remediation:
+          'Document rollback, forward-fix and pre-migration backup steps in docs/MIGRATIONS.md before release.',
+      };
+    }
+    details.push(...rollbackDocs.details);
+  }
+
+  // Invariant 4: when a target database is supplied, the schema must have converged on it.
   if (options.database) {
     let report;
     try {

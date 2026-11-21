@@ -277,6 +277,142 @@ describe('Release readiness checks for migrations, smoke tests and rollback (Iss
     });
   });
 
+  describe('migration artifacts and rollback documentation (Issue #362)', () => {
+    const ROLLBACK_DOCS = [
+      '# Migration safety',
+      '',
+      '## Rollback and forward-fix',
+      '',
+      'Take a pg_dump backup before migrating. Re-run after fixing the DDL, or restore from the dump.',
+      '',
+    ].join('\n');
+
+    async function withRepo(
+      name: string,
+      setup: (dir: string) => void,
+      run: (dir: string) => Promise<void>
+    ) {
+      const dir = path.join(REPO_ROOT, 'backend', 'tests', 'fixtures', name);
+      fs.mkdirSync(path.join(dir, 'db'), { recursive: true });
+      fs.writeFileSync(path.join(dir, 'db', 'schema.sql'), 'CREATE TABLE IF NOT EXISTS invoices (id UUID PRIMARY KEY);');
+      setup(dir);
+      try {
+        await run(dir);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    }
+
+    function migrations(dir: string, files: Record<string, string>) {
+      fs.mkdirSync(path.join(dir, 'db', 'migrations'), { recursive: true });
+      for (const [file, content] of Object.entries(files)) {
+        fs.writeFileSync(path.join(dir, 'db', 'migrations', file), content);
+      }
+    }
+
+    function docs(dir: string, content = ROLLBACK_DOCS) {
+      fs.mkdirSync(path.join(dir, 'docs'), { recursive: true });
+      fs.writeFileSync(path.join(dir, 'docs', 'MIGRATIONS.md'), content);
+    }
+
+    it('passes with unique, well-named migrations and documented rollback guidance', () =>
+      withRepo(
+        'temp-valid-migration-artifacts',
+        (dir) => {
+          migrations(dir, {
+            '002-email-notification-dedupe-key.sql': 'ALTER TABLE invoices ADD COLUMN IF NOT EXISTS notification_key TEXT;',
+            '003-jobs-cancellation.sql': 'ALTER TABLE jobs ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ;',
+          });
+          docs(dir);
+        },
+        async (dir) => {
+          const result = await checkMigrationsGate(dir);
+          assert.equal(result.status, 'PASS', JSON.stringify(result));
+          assert.ok(result.details.some((d) => d.includes('Verified 2 incremental migration file(s)')));
+          assert.ok(result.details.includes('Verified rollback, forward-fix and backup guidance in docs/MIGRATIONS.md.'));
+        }
+      ));
+
+    it('fails on duplicate migration versions', () =>
+      withRepo(
+        'temp-duplicate-migration-version',
+        (dir) => {
+          migrations(dir, {
+            '004-add-index.sql': 'CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status);',
+            '004-add-constraint.sql': 'ALTER TABLE invoices ADD CONSTRAINT invoices_amount_positive CHECK (amount > 0);',
+          });
+          docs(dir);
+        },
+        async (dir) => {
+          const result = await checkMigrationsGate(dir);
+          assert.equal(result.status, 'FAIL');
+          assert.match(result.summary, /migration artifacts are invalid/i);
+          assert.ok(result.details.some((d) => d.includes('Duplicate migration version 004')));
+        }
+      ));
+
+    it('fails on malformed migration filenames', () =>
+      withRepo(
+        'temp-malformed-migration-name',
+        (dir) => {
+          migrations(dir, { 'add-index.sql': 'CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status);' });
+          docs(dir);
+        },
+        async (dir) => {
+          const result = await checkMigrationsGate(dir);
+          assert.equal(result.status, 'FAIL');
+          assert.ok(result.details.some((d) => d.includes('must match <numeric-version>-<description>.sql')));
+        }
+      ));
+
+    it('fails when rollback documentation is missing for an incremental migration', () =>
+      withRepo(
+        'temp-missing-rollback-docs',
+        (dir) => {
+          migrations(dir, { '004-add-index.sql': 'CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status);' });
+        },
+        async (dir) => {
+          const result = await checkMigrationsGate(dir);
+          assert.equal(result.status, 'FAIL');
+          assert.match(result.summary, /Rollback documentation is incomplete/);
+          assert.ok(result.details.some((d) => d.includes('docs/MIGRATIONS.md is missing')));
+        }
+      ));
+
+    it('recovers after the migration is renamed and rollback docs are added', () =>
+      withRepo(
+        'temp-migration-retry',
+        (dir) => {
+          migrations(dir, { 'add-index.sql': 'CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status);' });
+        },
+        async (dir) => {
+          const blocked = await checkMigrationsGate(dir);
+          assert.equal(blocked.status, 'FAIL');
+
+          fs.renameSync(
+            path.join(dir, 'db', 'migrations', 'add-index.sql'),
+            path.join(dir, 'db', 'migrations', '004-add-index.sql')
+          );
+          docs(dir);
+
+          const retried = await checkMigrationsGate(dir);
+          assert.equal(retried.status, 'PASS', JSON.stringify(retried));
+          assert.ok(retried.details.some((d) => d.includes('Verified 1 incremental migration file(s)')));
+        }
+      ));
+
+    it('keeps schema-only repositories compatible when db/migrations does not exist', () =>
+      withRepo(
+        'temp-schema-only',
+        () => {},
+        async (dir) => {
+          const result = await checkMigrationsGate(dir);
+          assert.equal(result.status, 'PASS', JSON.stringify(result));
+          assert.ok(result.details.includes('No db/migrations directory; db/schema.sql is the sole migration source.'));
+        }
+      ));
+  });
+
   describe('target database convergence and rollback rehearsal', () => {
     // Catalog lookups find every table; invariant and backfill queries find no offending rows.
     const converged: ValidationDatabase = {

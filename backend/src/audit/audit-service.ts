@@ -249,7 +249,6 @@ export class MemoryAuditStore {
     this.eventsById.clear();
     this.eventsByEntity.clear();
     this.eventsByActor.clear();
-    this.evictedHeadHash = null;
   }
 
   size(): number {

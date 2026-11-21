@@ -10,6 +10,8 @@ The **Release Readiness Gate** (Issue #270) provides an automated preflight CI/C
 ### 1. Migrations & Schema Convergence Gate
 - **Idempotency**: All DDL definitions must support safe re-runs (`CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`).
 - **Destructive Operation Containment**: Prevents uncontained table or column drops without documented migration plans and transition notes.
+- **Incremental Migration Artifacts** (Issue #362): Files in `db/migrations/` must match `<numeric-version>-<description>.sql` (for example `004-add-index.sql`), have unique numeric versions, and be non-empty. A schema-only repository with no `db/migrations/` directory remains valid.
+- **Rollback Documentation** (Issue #362): When incremental migrations exist, `docs/MIGRATIONS.md` must document rollback, forward-fix/restore recovery, and a pre-migration backup (`pg_dump`). Missing guidance blocks the release.
 - **Convergence**: Guarantees that applying the schema against existing databases converges to the declared target state without leaving orphaned constraints.
 
 ### 2. Security & Secret Leakage Gate
@@ -85,6 +87,8 @@ DEPLOY_API_URL=https://api.example.com/api node ../scripts/deploy-smoke.mjs
 | Failure | Meaning | Action |
 |---------|---------|--------|
 | `Schema has not converged on the target database` | Migration partially applied | Re-run `npm run db:migrate` (idempotent), then re-run the gate. |
+| `Incremental migration artifacts are invalid` | Malformed filename, duplicate version, or empty file | Rename to `<numeric-version>-<description>.sql`, make versions unique, and remove empty files. Re-run the gate. |
+| `Rollback documentation is incomplete` | `docs/MIGRATIONS.md` lacks rollback, forward-fix or backup guidance | Add the missing section and re-run the gate. |
 | `Destructive-action approval does not match any action` | Stale or mistyped approval | Remove the approval. Approve per release only. |
 | `Target database could not be inspected` / rehearsal could not run | Connectivity or permissions | Fix `RELEASE_GATE_DATABASE_URL` or grants. The gate fails closed and never passes on an unknown state. |
 | Rollback rehearsal violations | The restored snapshot is not coherent | Do not promote. Triage with `npm run db:validate` and restore from the previous dump (`docs/MIGRATIONS.md` §4). |
@@ -114,8 +118,10 @@ npx tsx scripts/release-readiness-gate.ts --json
 ## Operational Edge Cases & Failure Modes
 
 1. **Uncontained Destructive DDL**: If a migration script contains raw `DROP TABLE` or `DROP COLUMN` without approved transition status, release is blocked immediately with remediation instructions.
-2. **Missing Invariant Coverage**: If a database restore leaves orphan transactions without matching invoices, the rollback rehearsal gate flags `totalViolations > 0` and stops deployment.
-3. **Partial Deployments**: If deploy smoke fails against a staging container, the release gate prevents traffic cutover.
+2. **Invalid Migration Artifacts**: A duplicate numeric version or malformed filename fails before deployment, because the runner has no ordering contract for those files.
+3. **Incomplete Rollback Documentation**: An incremental migration without documented rollback, forward-fix and backup steps fails the gate. Fix the docs and re-run; no schema change is needed.
+4. **Missing Invariant Coverage**: If a database restore leaves orphan transactions without matching invoices, the rollback rehearsal gate flags `totalViolations > 0` and stops deployment.
+5. **Partial Deployments**: If deploy smoke fails against a staging container, the release gate prevents traffic cutover.
 
 ## Rollback & Recovery Procedures
 

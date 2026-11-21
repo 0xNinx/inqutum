@@ -13,6 +13,7 @@ import {
   MAX_SELECTED_FIELDS,
   OWNER_ACCESS,
 } from '../exports/export-service';
+import { PublicStatusService, publicStatusService } from '../ops/public-status';
 
 export interface ExportRouterOptions {
   storage: InvoiceStorage;

@@ -34,6 +34,44 @@ transaction per scenario:
 | `wrong_destination` | `4` x 64 | `DESTINATION_MISMATCH` |
 | `not_found` | `5` x 64 | `TRANSACTION_NOT_FOUND` |
 
+## Malformed payload and replay fixtures (Issue #356)
+
+`backend/src/sandbox/malformed-payload-fixtures.ts` provides deterministic
+webhook inputs for rejection and replay tests. They are consumed by
+`backend/tests/malformed-payload-replay.test.ts`:
+
+```bash
+cd backend
+node --import tsx --test tests/malformed-payload-replay.test.ts
+```
+
+| Fixture | Expected result |
+| ------- | --------------- |
+| Missing provider | `400 WEBHOOK_EVENT_ID_INVALID` |
+| Missing event id | `400 WEBHOOK_EVENT_ID_INVALID` |
+| Oversized event id (256 chars) | `400 WEBHOOK_EVENT_ID_INVALID` |
+| Malformed JSON body | `401 WEBHOOK_SIGNATURE_INVALID` |
+| Missing signature header | `401 WEBHOOK_SIGNATURE_INVALID` |
+| Forged signature | `401 WEBHOOK_SIGNATURE_INVALID` |
+| Stale timestamp replay | `401 WEBHOOK_SIGNATURE_INVALID` |
+| Duplicate delivery | accepted, `duplicate: true`, handler runs once |
+| Same event id, different payload | `422 WEBHOOK_EVENT_ID_CONFLICT` |
+| In-flight event id | `409 WEBHOOK_EVENT_IN_PROGRESS` |
+| Event-id record older than seven days | `410 WEBHOOK_EVENT_ID_EXPIRED` |
+
+Recovery and rollback:
+
+- Handler failures release the idempotency lock, so a provider retry is
+  processed normally. Tests assert the handler runs again and returns a fresh
+  response.
+- An in-flight lock resolves after the holder completes or releases it; a
+  retry then succeeds. Do not delete records manually.
+- Expired records are intentionally retained for seven days. A webhook older
+  than that must be reconciled from the provider's event log instead of
+  replayed.
+- Signature and timestamp checks run before the store is touched, so rejected
+  payloads leave no idempotency state behind.
+
 ## Limitations
 
 - Only the transactions above exist; any other hash is not found.

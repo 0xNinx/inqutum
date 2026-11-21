@@ -6,6 +6,15 @@ schema is also the convergence target for older databases (it contains
 it is not always a no-op — it can drop objects and rewrite rows on a production
 database. This document covers how to preview that, verify it, and recover.
 
+## Incremental migration files
+
+Files under `db/migrations/` follow `<numeric-version>-<description>.sql`, for
+example `004-add-invoice-index.sql`. Versions must be unique and files must be
+non-empty. The release gate validates these artifacts before deployment and
+requires this document to keep rollback, forward-fix and pre-migration backup
+guidance (Issue #362). A repository that only uses `db/schema.sql` remains
+valid.
+
 ## 1. Preview before writing (dry-run)
 
 ```bash
