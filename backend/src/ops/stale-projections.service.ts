@@ -103,6 +103,9 @@ export interface RepairExecutionEvidence {
  */
 export class BoundedProjectionCache<K, V> {
   private readonly entries = new Map<K, { value: V; version: number }>();
+  // A generation prevents an in-flight load from resurrecting an invalidated entry.
+  private generation = 0;
+  private readonly inFlight = new Map<K, { version: number; generation: number; promise: Promise<V> }>();
 
   constructor(private readonly maxEntries: number) {
     if (!Number.isInteger(maxEntries) || maxEntries <= 0) {
@@ -149,18 +152,34 @@ export class BoundedProjectionCache<K, V> {
   async getOrLoad(key: K, currentVersion: number, loader: () => Promise<V>): Promise<V> {
     const hit = this.get(key, currentVersion);
     if (hit !== undefined) return hit;
-    const value = await loader();
-    this.set(key, value, currentVersion);
-    return value;
+    const existing = this.inFlight.get(key);
+    if (existing && existing.version === currentVersion && existing.generation === this.generation) {
+      return existing.promise;
+    }
+    const generation = this.generation;
+    const promise = Promise.resolve().then(loader).then((value) => {
+      if (generation === this.generation && this.inFlight.get(key)?.promise === promise) {
+        this.set(key, value, currentVersion);
+      }
+      return value;
+    }).finally(() => {
+      if (this.inFlight.get(key)?.promise === promise) this.inFlight.delete(key);
+    });
+    this.inFlight.set(key, { version: currentVersion, generation, promise });
+    return promise;
   }
 
   /** Explicitly invalidates a single key. Returns true if an entry was removed. */
   invalidate(key: K): boolean {
+    this.generation++;
+    this.inFlight.delete(key);
     return this.entries.delete(key);
   }
 
   /** Explicitly invalidates all entries. */
   invalidateAll(): void {
+    this.generation++;
+    this.inFlight.clear();
     this.entries.clear();
   }
 
