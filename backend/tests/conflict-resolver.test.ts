@@ -136,6 +136,7 @@ describe('Deterministic Conflict Resolver (#284)', () => {
 
     const result = resolveMultiClientConflict(base, server, clientUpdate, {
       strategy: 'CLIENT_WINS',
+      actorRole: 'ADMIN',
     });
 
     assert.strictEqual(result.resolved, true);
