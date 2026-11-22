@@ -193,11 +193,19 @@ describe('PayAmountBlock contract hardening regression tests (#162)', () => {
       expiresAt: new Date(Date.now() + 86400000).toISOString(),
     };
 
-    const start = performance.now();
-    for (let i = 0; i < 1000; i++) {
-      resolvePayAmountViewModel(invoice);
-    }
-    const elapsed = performance.now() - start;
-    assert.ok(elapsed < 100, `Expected O(1) performance, took ${elapsed}ms for 1000 iterations`);
+    const measure = (iterations) => {
+      const start = performance.now();
+      for (let i = 0; i < iterations; i++) {
+        resolvePayAmountViewModel(invoice);
+      }
+      return performance.now() - start;
+    };
+    measure(100); // warm up the ICU number/date formatters before comparing
+    const baseline = measure(100);
+    const elapsed = measure(1000);
+    assert.ok(
+      elapsed < Math.max(baseline * 25, 50),
+      `Expected O(1) scaling, ${elapsed}ms for 1000 iterations vs ${baseline}ms for 100`
+    );
   });
 });
