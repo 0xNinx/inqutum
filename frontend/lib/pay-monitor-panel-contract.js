@@ -147,7 +147,7 @@ function validateMonitorStatus(status) {
   const lower = (status || '').toLowerCase().trim();
   const validStatuses = ['listening', 'paused', 'reconnecting', 'degraded', 'error'];
   if (validStatuses.includes(lower)) {
-    return lower as MonitorStatus;
+    return lower;
   }
   return 'paused';
 }

@@ -34,7 +34,7 @@ const auto = (type) => ({ type, manual: false });
 const manual = (type) => ({ type, manual: true });
 
 test('baseline: the on-load check is silent when the backend is up', () => {
-  const [loaded] = run([auto('CHECK_STARTED'), auto('CHECK_SUCCEEDED')]);
+  const [, loaded] = run([auto('CHECK_STARTED'), auto('CHECK_SUCCEEDED')]);
   assert.equal(loaded.polite, '');
   assert.equal(loaded.status, 'up');
 });
@@ -144,7 +144,7 @@ test('component: the outcome lives in a persistent polite status region outside 
 
 test('component: retry buttons stay focusable while busy and ignore re-activation', () => {
   const banner = source('components/ApiStatusBanner.tsx');
-  assert.doesNotMatch(banner, /disabled=\{checking\}/);
+  assert.doesNotMatch(banner, /(?<!aria-)disabled=\{checking\}/);
   assert.equal((banner.match(/aria-disabled=\{checking\}/g) ?? []).length, 2);
   assert.equal((banner.match(/onClick=\{\(\) => void check\(true\)\}/g) ?? []).length, 2);
   assert.match(banner, /if \(inFlight\.current\) return;/);
