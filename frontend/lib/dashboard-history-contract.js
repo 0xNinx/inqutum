@@ -1,5 +1,5 @@
 /**
- * Hardened contract for the dashboard history boundary (issue #232).
+ * Hardened contract for the dashboard history boundary (issue #232)..
  *
  * Defines success, validation, retry, and degraded-dependency behavior for
  * dashboard data scoping. A failure here can make invoice or payment-proof
