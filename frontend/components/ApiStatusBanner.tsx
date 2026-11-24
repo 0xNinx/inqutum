@@ -3,8 +3,13 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { AlertTriangle, RefreshCw, ServerOff, X } from 'lucide-react';
 import { API_CONFIG, apiErrorMessage, getPublicStatus, healthCheck } from '@/lib/api';
-import { publicStatusBanner, type PublicStatusBanner } from '@/lib/public-status';
+import {
+  API_STATUS_BANNER_COPY,
+  resolveApiStatusViewModel,
+  resolveStatusBanner,
+} from '@/lib/api-status-banner-contract';
 import { initialApiStatusAnnouncement, nextApiStatusAnnouncement } from '@/lib/api-status-announcement';
+import type { PublicStatusBanner } from '@/lib/public-status';
 
 const STATUS_TONE_CLASSES: Record<PublicStatusBanner['tone'], string> = {
   critical: 'bg-amber-950 text-white',
@@ -15,7 +20,7 @@ const STATUS_TONE_CLASSES: Record<PublicStatusBanner['tone'], string> = {
 export default function ApiStatusBanner() {
   const [error, setError] = useState<string | null>(API_CONFIG.error);
   const [checking, setChecking] = useState(false);
-  const [serviceStatus, setServiceStatus] = useState<PublicStatusBanner | null>(null);
+  const [statusPayload, setStatusPayload] = useState<unknown>(null);
   const [statusDismissed, setStatusDismissed] = useState(false);
   const lastStatusState = useRef<string | null>(null);
   // A ref, not state: a second press during a check is ignored before React re-renders.
@@ -39,15 +44,16 @@ export default function ApiStatusBanner() {
       announce({ type: 'CHECK_SUCCEEDED', manual });
       // Status is best effort: an older backend without /status shows no banner.
       try {
-        const next = publicStatusBanner(await getPublicStatus());
-        setServiceStatus(next);
+        const payload: unknown = await getPublicStatus();
+        setStatusPayload(payload);
         // A new state re-shows a banner the user dismissed for the previous one.
-        if ((next?.state ?? null) !== lastStatusState.current) {
-          lastStatusState.current = next?.state ?? null;
+        const nextState = resolveStatusBanner(payload)?.state ?? null;
+        if (nextState !== lastStatusState.current) {
+          lastStatusState.current = nextState;
           setStatusDismissed(false);
         }
       } catch {
-        setServiceStatus(null);
+        setStatusPayload(null);
       }
     } catch (cause) {
       setError(apiErrorMessage(cause));
@@ -61,7 +67,7 @@ export default function ApiStatusBanner() {
   useEffect(() => {
     void check();
     const offline = () => {
-      setError('Your browser is offline. Reconnect, then retry.');
+      setError(API_STATUS_BANNER_COPY.offline);
       announce({ type: 'CHECK_FAILED', manual: false });
     };
     const online = () => void check();
@@ -78,8 +84,10 @@ export default function ApiStatusBanner() {
       {announcement.polite}
     </div>
   );
+  const banner = resolveApiStatusViewModel({ error, statusPayload });
 
-  if (!error) {
+  if (!banner.hasError) {
+    const serviceStatus = banner.status;
     if (!serviceStatus || statusDismissed) return region;
     return (
       <>
@@ -113,7 +121,7 @@ export default function ApiStatusBanner() {
                 className="mt-3 text-sm underline underline-offset-4 inline-flex items-center gap-2 aria-disabled:opacity-60"
               >
                 <RefreshCw className={`w-4 h-4 ${checking ? 'animate-spin' : ''}`} aria-hidden="true" />
-                {checking ? 'Checking…' : 'Check status again'}
+                {checking ? API_STATUS_BANNER_COPY.checking : API_STATUS_BANNER_COPY.checkStatus}
               </button>
             </div>
             <button type="button" onClick={() => setStatusDismissed(true)} aria-label="Dismiss service status">
@@ -135,16 +143,16 @@ export default function ApiStatusBanner() {
         <div className="flex items-start gap-3">
           <ServerOff className="w-5 h-5 mt-0.5 shrink-0" aria-hidden="true" />
           <div className="flex-1">
-            <p className="font-semibold">Backend connection problem</p>
-            <p className="text-sm text-red-100 mt-1">{error}</p>
+            <p className="font-semibold">{API_STATUS_BANNER_COPY.connectionTitle}</p>
+            <p className="text-sm text-red-100 mt-1">{banner.message}</p>
             <button
               type="button"
               onClick={() => void check(true)}
               aria-disabled={checking}
               className="mt-3 text-sm underline underline-offset-4 inline-flex items-center gap-2 aria-disabled:opacity-60"
             >
-              <RefreshCw className={`w-4 h-4 ${checking ? 'animate-spin' : ''}`} aria-hidden="true" />
-              {checking ? 'Checking…' : 'Retry connection'}
+                  <RefreshCw className={`w-4 h-4 ${checking ? 'animate-spin' : ''}`} aria-hidden="true" />
+                  {checking ? API_STATUS_BANNER_COPY.checking : API_STATUS_BANNER_COPY.retry}
             </button>
           </div>
           <button type="button" onClick={() => setError(null)} aria-label="Dismiss backend warning">

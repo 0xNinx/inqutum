@@ -9,6 +9,13 @@ import { toast } from 'sonner';
 import AssetLogo from './AssetLogo';
 import { openInvoicePDF, shareInvoiceByEmail } from '@/lib/export';
 import { effectiveInvoiceStatus } from '@/lib/invoice-lifecycle';
+import {
+  INVOICE_CARD_COPY,
+  resolveCopyToast,
+  resolveExportToast,
+  resolveInvoiceCardViewModel,
+  type InvoiceCardToast,
+} from '@/lib/invoice-card-contract';
 
 interface Invoice {
   id: string;
@@ -39,34 +46,34 @@ export default function InvoiceCard({ invoice }: InvoiceCardProps) {
   const [linkCopied, setLinkCopied] = useState(false);
   const status = effectiveInvoiceStatus(invoice) || invoice.status;
   const statusColor = getStatusColor(status);
-  const paymentUrl = `${window.location.origin}/pay/${invoice.id}`;
+  const view = resolveInvoiceCardViewModel(invoice, {
+    status,
+    origin: typeof window === 'undefined' ? undefined : window.location.origin,
+  });
 
-  const handleCopyLink = async () => {
-    const success = await copyToClipboard(paymentUrl);
-    if (success) {
-      setLinkCopied(true);
-      toast.success('Invoice link copied');
-      setTimeout(() => setLinkCopied(false), 2000);
-    } else {
-      toast.error('Could not copy invoice link');
-    }
-  };
-
-  const reportExport = (result: ReturnType<typeof openInvoicePDF>, success: string) => {
-    if (result.ok) {
-      toast.success(success);
+  const report = (feedback: InvoiceCardToast) => {
+    if (feedback.kind === 'success') {
+      toast.success(feedback.message);
       return;
     }
-    toast.error(result.message, {
-      description: result.retryable ? result.recoveryAction : undefined,
-    });
+    toast.error(feedback.message, { description: feedback.description });
+  };
+
+  const handleCopyLink = async () => {
+    if (!view.paymentUrl) return;
+    const feedback = resolveCopyToast(await copyToClipboard(view.paymentUrl));
+    report(feedback);
+    if (feedback.kind === 'success') {
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 2000);
+    }
   };
 
   const handleDownloadPDF = () =>
-    reportExport(openInvoicePDF(invoice as any), 'Opening payment proof');
+    report(resolveExportToast(openInvoicePDF(invoice as any), INVOICE_CARD_COPY.proofSuccess));
 
   const handleEmailShare = () =>
-    reportExport(shareInvoiceByEmail(invoice as any), 'Opening email');
+    report(resolveExportToast(shareInvoiceByEmail(invoice as any), INVOICE_CARD_COPY.emailSuccess));
 
   return (
     <div className="card hover:shadow-xl group">
@@ -120,8 +127,9 @@ export default function InvoiceCard({ invoice }: InvoiceCardProps) {
           <ExternalLink className="w-4 h-4" />
           View
         </Link>
-        {status === 'PENDING' && (
+        {view.canCopyLink && (
           <button
+            type="button"
             onClick={handleCopyLink}
             className="btn btn-secondary flex items-center justify-center gap-2 px-3"
             aria-label={linkCopied ? 'Invoice link copied' : 'Copy invoice link'}
@@ -134,7 +142,7 @@ export default function InvoiceCard({ invoice }: InvoiceCardProps) {
             )}
           </button>
         )}
-        {status === 'PAID' && (
+        {view.canDownloadProof && (
           <button
             type="button"
             onClick={handleDownloadPDF}
@@ -147,12 +155,12 @@ export default function InvoiceCard({ invoice }: InvoiceCardProps) {
         {status === 'PAID' && (
           <button
             type="button"
-            onClick={!invoice.customerEmail ? undefined : handleEmailShare}
-            disabled={!invoice.customerEmail}
-            title={!invoice.customerEmail ? 'No client email on this invoice' : 'Email Proof'}
-            aria-label={!invoice.customerEmail ? 'No client email on this invoice' : 'Email Proof'}
+            onClick={view.canEmailProof ? handleEmailShare : undefined}
+            disabled={!view.canEmailProof}
+            title={view.emailProofLabel}
+            aria-label={view.emailProofLabel}
             className={`btn btn-outline flex items-center justify-center gap-2 px-3 ${
-              !invoice.customerEmail ? 'opacity-50 cursor-not-allowed' : ''
+              !view.canEmailProof ? 'opacity-50 cursor-not-allowed' : ''
             }`}
           >
             <Mail className="w-4 h-4" aria-hidden="true" />
